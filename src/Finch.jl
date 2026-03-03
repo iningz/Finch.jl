@@ -59,6 +59,8 @@ export choose, minby, maxby, overwrite, initwrite, filterop, d
 
 export fill_value, AsArray, expanddims, tensor_tree
 
+export specialize
+
 export parallelAnalysis, ParallelAnalysisResults
 export parallel, extent, auto
 export Serial, SerialMemory, CPU, CPULocalArray, CPULocalMemory
@@ -161,6 +163,7 @@ include("tensors/combinators/windowed.jl")
 include("tensors/combinators/swizzle.jl")
 include("tensors/combinators/scale.jl")
 include("tensors/combinators/product.jl")
+include("tensors/combinators/specialize.jl")
 
 const Sparse = SparseDictLevel
 const SparseLevel = SparseDictLevel
