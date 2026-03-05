@@ -65,9 +65,7 @@ Collect specialization params from a level hierarchy. Returns a flat tuple
 embedded in `SpecializedTensor`'s type parameter. Only Dense is supported now.
 """
 level_params(lvl) = ()
-function level_params(lvl::DenseLevel)
-    (lvl.shape, level_params(lvl.lvl)...)
-end
+level_params(lvl::DenseLevel) = (lvl.shape, level_params(lvl.lvl)...)
 
 function virtualize(ctx, ex, ::Type{SpecializedTensor{Params,Tensor{Lvl}}}) where {Params,Lvl}
     tag = freshen(ctx, :tns)
