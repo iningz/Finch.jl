@@ -2,7 +2,7 @@ using Finch
 using Finch: virtualize_with_data, VirtualSparseListLevel, VirtualDenseLevel,
     resolve_fiber_data, SparseListFiberData, is_contiguous,
     VirtualSubFiber, VirtualExtent, unfurl, Run, Thunk, FillLeaf,
-    Sequence, Phase, Spike
+    Sequence, Phase, Spike, SPARSE_LIST_UNROLL_MAX
 using Finch.FinchNotation: literal, value, isliteral, getval, reader
 using Finch: defaultread
 using SparseArrays
@@ -192,7 +192,7 @@ end
         @test phase2_body isa Run
     end
 
-    @testset "2-element fiber still emits Thunk (generic path)" begin
+    @testset "2-element fiber emits unrolled Sequence with 3 phases" begin
         # Build a 1D SparseList(Element) with 2 nonzeros at indices 2 and 4
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0]), 5, [1, 3], [2, 4])
         ctx = Finch.JuliaContext()
@@ -204,7 +204,93 @@ end
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
         looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
-        @test looplet isa Thunk
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 3  # 2 Spikes + 1 trailing Run
+
+        # Phase 1: Spike at index 2
+        p1_stop = looplet.phases[1].stop(ctx, ext)
+        @test p1_stop == literal(2)
+        p1_body = looplet.phases[1].body(ctx, ext)
+        @test p1_body isa Spike
+
+        # Phase 2: Spike at index 4
+        p2_stop = looplet.phases[2].stop(ctx, ext)
+        @test p2_stop == literal(4)
+        p2_body = looplet.phases[2].body(ctx, ext)
+        @test p2_body isa Spike
+
+        # Phase 3: trailing Run(fill)
+        p3_body = looplet.phases[3].body(ctx, ext)
+        @test p3_body isa Run
+    end
+
+    @testset "3-element fiber emits unrolled Sequence with 4 phases" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0, 3.0]), 7, [1, 4], [1, 4, 6])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 3
+
+        ext = VirtualExtent(literal(1), literal(7))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 4  # 3 Spikes + trailing Run
+
+        # Check stops match the indices
+        @test looplet.phases[1].stop(ctx, ext) == literal(1)
+        @test looplet.phases[2].stop(ctx, ext) == literal(4)
+        @test looplet.phases[3].stop(ctx, ext) == literal(6)
+
+        # All first 3 phases are Spikes
+        for k in 1:3
+            @test looplet.phases[k].body(ctx, ext) isa Spike
+        end
+
+        # Last phase is trailing Run
+        @test looplet.phases[4].body(ctx, ext) isa Run
+    end
+
+    @testset "4-element fiber (at threshold) emits unrolled Sequence with 5 phases" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0]), 10, [1, 5], [2, 4, 7, 9])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 4
+        @test length(fdata) == SPARSE_LIST_UNROLL_MAX  # at the threshold
+
+        ext = VirtualExtent(literal(1), literal(10))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 5  # 4 Spikes + trailing Run
+
+        @test looplet.phases[1].stop(ctx, ext) == literal(2)
+        @test looplet.phases[2].stop(ctx, ext) == literal(4)
+        @test looplet.phases[3].stop(ctx, ext) == literal(7)
+        @test looplet.phases[4].stop(ctx, ext) == literal(9)
+
+        for k in 1:4
+            @test looplet.phases[k].body(ctx, ext) isa Spike
+        end
+        @test looplet.phases[5].body(ctx, ext) isa Run
+    end
+
+    @testset "5-element fiber (above threshold) emits Thunk (generic path)" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]), 10, [1, 6], [1, 3, 5, 7, 9])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 5
+        @test length(fdata) > SPARSE_LIST_UNROLL_MAX  # above the threshold
+
+        ext = VirtualExtent(literal(1), literal(10))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
+        @test looplet isa Thunk  # too many nonzeros, falls back to generic
     end
 
     @testset "without concrete data, generic path is used" begin

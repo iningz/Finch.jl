@@ -208,6 +208,16 @@ function is_contiguous(s::SparseListFiberData)
 end
 
 """
+    SPARSE_LIST_UNROLL_MAX
+
+Maximum number of nonzeros in a SparseList fiber for which `unfurl` will emit
+a fully unrolled `Sequence` of `Phase(Spike)` entries instead of the generic
+`Thunk(Stepper)`.  Each nonzero becomes a compile-time literal index and
+child position, enabling cascading specialization into deeper levels.
+"""
+const SPARSE_LIST_UNROLL_MAX = 4
+
+"""
     resolve_fiber_data(lvl::VirtualSparseListLevel, pos)
 
 If `lvl` has concrete `ptr_data`/`idx_data` and `pos` is a `literal` FinchNode,
@@ -453,27 +463,31 @@ function unfurl(
         if length(fdata) == 0
             # Empty fiber: the entire dimension is fill value.
             return Run(FillLeaf(virtual_level_fill_value(lvl)))
-        elseif length(fdata) == 1
-            # Singleton fiber: one nonzero at a known index and known child pos.
-            # No Thunk, no Stepper, no runtime ptr/idx reads.
-            # The child pos is literal, enabling cascading specialization.
-            the_idx = fdata.indices[1]
-            the_q = fdata.start
+        elseif length(fdata) <= SPARSE_LIST_UNROLL_MAX
+            # Small-nnz unrolling: emit one Phase(Spike) per nonzero with
+            # literal index and literal child position, then a trailing
+            # Phase(Run(fill)).  Every child pos is a compile-time literal,
+            # enabling cascading specialization into deeper levels.
             fill = FillLeaf(virtual_level_fill_value(lvl))
-            return Sequence([
-                Phase(;
-                    stop=(ctx, ext) -> literal(the_idx),
+            nnz = length(fdata)
+            phases = Vector{Phase}(undef, nnz + 1)
+            for k in 1:nnz
+                k_idx = fdata.indices[k]
+                k_q   = fdata.start + k - 1
+                phases[k] = Phase(;
+                    stop=(ctx, ext) -> literal(k_idx),
                     body=(ctx, ext) -> Spike(;
                         body=fill,
                         tail=Simplify(instantiate(
-                            ctx, VirtualSubFiber(lvl.lvl, literal(the_q)), mode
+                            ctx, VirtualSubFiber(lvl.lvl, literal(k_q)), mode
                         )),
                     ),
-                ),
-                Phase(;
-                    body=(ctx, ext) -> Run(fill)
-                ),
-            ])
+                )
+            end
+            phases[nnz + 1] = Phase(;
+                body=(ctx, ext) -> Run(fill)
+            )
+            return Sequence(phases)
         end
     end
 
