@@ -1,7 +1,8 @@
 using Finch
 using Finch: virtualize_with_data, VirtualSparseListLevel, VirtualDenseLevel,
-    resolve_fiber_data, SparseListFiberData, is_contiguous
-using Finch.FinchNotation: literal, value, isliteral, getval
+    resolve_fiber_data, SparseListFiberData, is_contiguous,
+    VirtualSubFiber, VirtualExtent, unfurl, Run, Thunk, FillLeaf
+using Finch.FinchNotation: literal, value, isliteral, getval, reader
 using SparseArrays
 using Test
 
@@ -144,5 +145,55 @@ using Test
         @test s !== nothing
         # The indices field should be a view into idx_data, not a copy
         @test s.indices isa SubArray
+    end
+end
+
+@testset "unfurl specialization" begin
+
+    @testset "empty fiber emits Run instead of Thunk+Stepper" begin
+        # Build a 1D SparseList(Element) with no nonzeros directly
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        # Confirm the fiber is empty
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test fdata !== nothing
+        @test length(fdata) == 0
+
+        # Call unfurl at pos=literal(1) — should get Run, not the generic Thunk
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader, Finch.defaultread)
+        @test looplet isa Run
+    end
+
+    @testset "non-empty fiber still emits Thunk (generic path)" begin
+        # Build a 1D SparseList(Element) with 2 nonzeros at indices 2 and 4
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0]), 5, [1, 3], [2, 4])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 2
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader, Finch.defaultread)
+        @test looplet isa Thunk
+    end
+
+    @testset "without concrete data, generic path is used" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
+        ctx = Finch.JuliaContext()
+        # Standard virtualize — no data attached
+        vlvl = Finch.virtualize(ctx, :A_lvl, typeof(lvl), :tns_lvl)
+
+        @test vlvl.ptr_data === nothing
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader, Finch.defaultread)
+        @test looplet isa Thunk  # no specialization possible
     end
 end

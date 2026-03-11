@@ -445,6 +445,17 @@ function unfurl(
     ::Union{typeof(defaultread),typeof(walk)},
 )
     (lvl, pos) = (fbr.lvl, fbr.pos)
+
+    # If we can resolve the fiber data at this position,
+    # emit simplified looplets instead of the generic Stepper.
+    fdata = resolve_fiber_data(lvl, pos)
+    if fdata !== nothing
+        if length(fdata) == 0
+            # Empty fiber: the entire dimension is fill value.
+            return Run(FillLeaf(virtual_level_fill_value(lvl)))
+        end
+    end
+
     tag = lvl.tag
     Tp = postype(lvl)
     Ti = lvl.Ti
