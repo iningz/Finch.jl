@@ -9,6 +9,38 @@ using Finch: defaultread
 using SparseArrays
 using Test
 
+@testset "Dense shape lifted to literal via virtualize_with_data" begin
+
+    @testset "Dense shape becomes literal" begin
+        A = Tensor(Dense(Element(0.0)), collect(1.0:5.0))
+        ctx = Finch.JuliaContext()
+        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vlvl = vfbr.lvl
+        @test vlvl isa VirtualDenseLevel
+        @test isliteral(vlvl.shape)
+        @test getval(vlvl.shape) == 5
+    end
+
+    @testset "Dense shape is runtime value without virtualize_with_data" begin
+        A = Tensor(Dense(Element(0.0)), collect(1.0:5.0))
+        ctx = Finch.JuliaContext()
+        vfbr = Finch.virtualize(ctx, :A, typeof(A), :tns)
+        vlvl = vfbr.lvl
+        @test !isliteral(vlvl.shape)
+    end
+
+    @testset "Dense(SparseList) — outer shape is literal" begin
+        S = sparse([1, 3], [1, 2], [5.0, 6.0], 4, 3)
+        A = Tensor(Dense(SparseList(Element(0.0))), S)
+        ctx = Finch.JuliaContext()
+        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        outer = vfbr.lvl
+        @test outer isa VirtualDenseLevel
+        @test isliteral(outer.shape)
+        @test getval(outer.shape) == 3
+    end
+end
+
 @testset "resolve_fiber_data" begin
 
     @testset "returns nothing when ptr_data is missing" begin
