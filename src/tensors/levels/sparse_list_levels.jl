@@ -177,6 +177,55 @@ mutable struct VirtualSparseListLevel <: AbstractVirtualLevel
     idx_data
 end
 
+"""
+    SparseListFiberData
+
+Describes the concrete iteration structure of a SparseList level at a known
+position. Extracted from `ptr_data` and `idx_data` when `pos` is a literal.
+
+Fields:
+- `start`: first position in the idx array for this fiber
+- `stop`: one past the last position (so nnz = stop - start)
+- `indices`: view into `idx_data[start:stop-1]`, the sorted nonzero indices
+"""
+struct SparseListFiberData
+    start::Int
+    stop::Int
+    indices::AbstractVector  # view into idx_data
+end
+
+Base.length(s::SparseListFiberData) = s.stop - s.start
+
+"""
+    is_contiguous(s::SparseListFiberData)
+
+Returns true if the nonzero indices form a contiguous range `a:b` with no gaps.
+"""
+function is_contiguous(s::SparseListFiberData)
+    n = length(s)
+    n <= 1 && return true
+    return s.indices[end] - s.indices[1] + 1 == n
+end
+
+"""
+    resolve_fiber_data(lvl::VirtualSparseListLevel, pos)
+
+If `lvl` has concrete `ptr_data`/`idx_data` and `pos` is a `literal` FinchNode,
+extract and return a `SparseListFiberData` describing the fiber at that position.
+Returns `nothing` if the structure cannot be resolved (no data, or pos is not literal).
+"""
+function resolve_fiber_data(lvl::VirtualSparseListLevel, pos)
+    lvl.ptr_data === nothing && return nothing
+    lvl.idx_data === nothing && return nothing
+    !isliteral(pos) && return nothing
+    p = getval(pos)
+    (p < 1 || p >= length(lvl.ptr_data)) && return nothing
+    start = lvl.ptr_data[p]
+    stop = lvl.ptr_data[p + 1]
+    indices = @view lvl.idx_data[start:stop-1]
+    return SparseListFiberData(start, stop, indices)
+end
+
 function is_level_injective(ctx, lvl::VirtualSparseListLevel)
     [is_level_injective(ctx, lvl.lvl)..., false]
 end
