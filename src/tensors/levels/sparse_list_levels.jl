@@ -232,7 +232,7 @@ function resolve_fiber_data(lvl::VirtualSparseListLevel, pos)
     (p < 1 || p >= length(lvl.ptr_data)) && return nothing
     start = lvl.ptr_data[p]
     stop = lvl.ptr_data[p + 1]
-    indices = @view lvl.idx_data[start:stop-1]
+    indices = @view lvl.idx_data[start:(stop - 1)]
     return SparseListFiberData(start, stop, indices)
 end
 
@@ -274,7 +274,7 @@ function virtualize(
     )
 end
 
-function virtualize_with_data(
+function virtualize_concrete(
     ctx, ex, lvl_concrete::SparseListLevel{Ti,Ptr,Idx,Lvl}, tag=:lvl
 ) where {Ti,Ptr,Idx,Lvl}
     tag = freshen(ctx, tag)
@@ -297,7 +297,7 @@ function virtualize_with_data(
     prev_pos = freshen(ctx, tag, :_prev_pos)
     VirtualSparseListLevel(
         tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos,
-        lvl_concrete.ptr, lvl_concrete.idx
+        lvl_concrete.ptr, lvl_concrete.idx,
     )
 end
 function lower(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, ::DefaultStyle)
@@ -475,14 +475,16 @@ function try_specialize_fiber(ctx, lvl::VirtualSparseListLevel, pos, mode)
         phases = Vector{Phase}(undef, nnz + 1)
         for k in 1:nnz
             k_idx = fdata.indices[k]
-            k_q   = fdata.start + k - 1
+            k_q = fdata.start + k - 1
             phases[k] = Phase(;
                 stop=(ctx, ext) -> literal(k_idx),
                 body=(ctx, ext) -> Spike(;
                     body=fill,
-                    tail=Simplify(instantiate(
-                        ctx, VirtualSubFiber(lvl.lvl, literal(k_q)), mode
-                    )),
+                    tail=Simplify(
+                        instantiate(
+                            ctx, VirtualSubFiber(lvl.lvl, literal(k_q)), mode
+                        )
+                    ),
                 ),
             )
         end
@@ -515,9 +517,12 @@ function try_specialize_fiber(ctx, lvl::VirtualSparseListLevel, pos, mode)
                         preamble=quote
                             $my_q = $(q_start) + $(ctx(i)) - $(a)
                         end,
-                        body=(ctx) -> Simplify(instantiate(
-                            ctx, VirtualSubFiber(lvl.lvl, value(my_q, Tp)), mode
-                        )),
+                        body=(ctx) -> Simplify(
+                            instantiate(
+                                ctx, VirtualSubFiber(lvl.lvl, value(my_q, Tp)),
+                                mode
+                            ),
+                        ),
                     ),
                 ),
             ),

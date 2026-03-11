@@ -1,9 +1,9 @@
 using Finch
-using Finch: virtualize_with_data, virtualize, VirtualSparseListLevel, VirtualDenseLevel, VirtualFiber, JuliaContext
+using Finch: virtualize_concrete, virtualize, VirtualSparseListLevel, VirtualDenseLevel, VirtualFiber, JuliaContext
 using SparseArrays
 
 """
-Test that `virtualize_with_data` attaches concrete ptr/idx arrays
+Test that `virtualize_concrete` attaches concrete ptr/idx arrays
 to VirtualSparseListLevel during virtualization.
 """
 
@@ -14,7 +14,7 @@ function test_sparse_list_has_data()
     lvl = A.lvl
 
     ctx = JuliaContext()
-    vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+    vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
     @assert vlvl isa VirtualSparseListLevel
     @assert vlvl.ptr_data !== nothing "ptr_data should not be nothing"
@@ -32,7 +32,7 @@ function test_dense_sparse_list_has_data()
     lvl = A.lvl
 
     ctx = JuliaContext()
-    vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+    vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
     @assert vlvl isa VirtualDenseLevel "outer should be VirtualDenseLevel"
     inner = vlvl.lvl
@@ -45,13 +45,13 @@ function test_dense_sparse_list_has_data()
     println("    ✓ data propagates through Dense to inner SparseList")
 end
 
-function test_tensor_virtualize_with_data()
-    println("  Test: virtualize_with_data on Tensor propagates to levels")
+function test_tensor_virtualize_concrete()
+    println("  Test: virtualize_concrete on Tensor propagates to levels")
 
     A = Tensor(Dense(SparseList(Element(0.0))), sprand(5, 4, 0.5))
 
     ctx = JuliaContext()
-    vfbr = virtualize_with_data(ctx, :A, A, :tns)
+    vfbr = virtualize_concrete(ctx, :A, A, :tns)
 
     @assert vfbr isa VirtualFiber
     outer = vfbr.lvl
@@ -61,7 +61,7 @@ function test_tensor_virtualize_with_data()
     @assert inner.ptr_data === A.lvl.lvl.ptr
     @assert inner.idx_data === A.lvl.lvl.idx
 
-    println("    ✓ virtualize_with_data on Tensor works end-to-end")
+    println("    ✓ virtualize_concrete on Tensor works end-to-end")
 end
 
 function test_standard_virtualize_has_no_data()
@@ -88,7 +88,7 @@ function test_can_read_structure()
     lvl = A.lvl.lvl  # the SparseList level
 
     ctx = JuliaContext()
-    vlvl = virtualize_with_data(ctx, :A_lvl_lvl, lvl, :tns_lvl)
+    vlvl = virtualize_concrete(ctx, :A_lvl_lvl, lvl, :tns_lvl)
 
     ptr = vlvl.ptr_data
     ncols = length(ptr) - 1
@@ -116,7 +116,7 @@ function test_can_read_indices()
     lvl = A.lvl.lvl
 
     ctx = JuliaContext()
-    vlvl = virtualize_with_data(ctx, :A_lvl_lvl, lvl, :tns_lvl)
+    vlvl = virtualize_concrete(ctx, :A_lvl_lvl, lvl, :tns_lvl)
 
     ptr = vlvl.ptr_data
     idx = vlvl.idx_data
@@ -135,13 +135,13 @@ end
 function main()
     println()
     println("=" ^ 60)
-    println("  virtualize_with_data: concrete array inspection tests")
+    println("  virtualize_concrete: concrete array inspection tests")
     println("=" ^ 60)
     println()
 
     test_sparse_list_has_data()
     test_dense_sparse_list_has_data()
-    test_tensor_virtualize_with_data()
+    test_tensor_virtualize_concrete()
     test_standard_virtualize_has_no_data()
     test_can_read_structure()
     test_can_read_indices()

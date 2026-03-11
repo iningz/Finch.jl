@@ -98,7 +98,12 @@ function Finch.virtualize(
     ctx, ex, ::Type{FinchNotation.TagInstance{Var,Bind}}
 ) where {Var,Bind}
     var = virtualize(ctx, :($ex.var), Var)
-    bind = virtualize(ctx, :($ex.bind), Bind, var.name)
+    concrete = get(ctx.data, var.name, nothing)
+    if concrete !== nothing
+        bind = Finch.virtualize_concrete(ctx, :($ex.bind), concrete, var.name)
+    else
+        bind = virtualize(ctx, :($ex.bind), Bind, var.name)
+    end
     tag(var, bind)
 end
 function Finch.virtualize(

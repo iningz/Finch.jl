@@ -1,27 +1,28 @@
 using Finch
-using Finch: virtualize_with_data, VirtualSparseListLevel, VirtualDenseLevel,
+using Finch: virtualize_concrete, VirtualSparseListLevel, VirtualDenseLevel,
     resolve_fiber_data, SparseListFiberData, is_contiguous,
     VirtualSubFiber, VirtualExtent, unfurl, Run, Thunk, FillLeaf,
     Sequence, Phase, Spike, Lookup, Switch, SPARSE_LIST_UNROLL_MAX,
-    gallop, follow
-using Finch.FinchNotation: literal, value, isliteral, getval, reader
+    gallop, follow, execute_specialized
+using Finch.FinchNotation:
+    literal, value, isliteral, getval, reader,
+    @finch_program_instance
 using Finch: defaultread
 using SparseArrays
 using Test
 
-@testset "Dense shape lifted to literal via virtualize_with_data" begin
-
+@testset "Dense shape lifted to literal via virtualize_concrete" begin
     @testset "Dense shape becomes literal" begin
         A = Tensor(Dense(Element(0.0)), collect(1.0:5.0))
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         vlvl = vfbr.lvl
         @test vlvl isa VirtualDenseLevel
         @test isliteral(vlvl.shape)
         @test getval(vlvl.shape) == 5
     end
 
-    @testset "Dense shape is runtime value without virtualize_with_data" begin
+    @testset "Dense shape is runtime value without virtualize_concrete" begin
         A = Tensor(Dense(Element(0.0)), collect(1.0:5.0))
         ctx = Finch.JuliaContext()
         vfbr = Finch.virtualize(ctx, :A, typeof(A), :tns)
@@ -33,7 +34,7 @@ using Test
         S = sparse([1, 3], [1, 2], [5.0, 6.0], 4, 3)
         A = Tensor(Dense(SparseList(Element(0.0))), S)
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         outer = vfbr.lvl
         @test outer isa VirtualDenseLevel
         @test isliteral(outer.shape)
@@ -42,7 +43,6 @@ using Test
 end
 
 @testset "resolve_fiber_data" begin
-
     @testset "returns nothing when ptr_data is missing" begin
         A = Tensor(Dense(SparseList(Element(0.0))), sprand(5, 3, 0.5))
         ctx = Finch.JuliaContext()
@@ -57,7 +57,7 @@ end
     @testset "returns nothing when pos is not literal" begin
         A = Tensor(Dense(SparseList(Element(0.0))), sprand(5, 3, 0.5))
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         inner = vfbr.lvl.lvl
         @test inner.ptr_data !== nothing
         # value(...) is a runtime symbol, not a literal
@@ -67,7 +67,7 @@ end
     @testset "returns nothing for out-of-bounds pos" begin
         A = Tensor(Dense(SparseList(Element(0.0))), sprand(5, 3, 0.5))
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         inner = vfbr.lvl.lvl
         # pos = 0 is below valid range
         @test resolve_fiber_data(inner, literal(0)) === nothing
@@ -80,7 +80,7 @@ end
         S = sparse([1, 3], [1, 1], [1.0, 2.0], 4, 3)
         A = Tensor(Dense(SparseList(Element(0.0))), S)
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         inner = vfbr.lvl.lvl
 
         s = resolve_fiber_data(inner, literal(2))  # column 2 — empty
@@ -94,7 +94,7 @@ end
         S = sparse([3], [2], [7.0], 5, 3)
         A = Tensor(Dense(SparseList(Element(0.0))), S)
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         inner = vfbr.lvl.lvl
 
         s = resolve_fiber_data(inner, literal(2))  # column 2 has one entry at row 3
@@ -109,7 +109,7 @@ end
         S = sparse([2, 3, 4], [1, 1, 1], [1.0, 2.0, 3.0], 6, 2)
         A = Tensor(Dense(SparseList(Element(0.0))), S)
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         inner = vfbr.lvl.lvl
 
         s = resolve_fiber_data(inner, literal(1))
@@ -124,7 +124,7 @@ end
         S = sparse([1, 3, 5], [1, 1, 1], [1.0, 2.0, 3.0], 6, 2)
         A = Tensor(Dense(SparseList(Element(0.0))), S)
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         inner = vfbr.lvl.lvl
 
         s = resolve_fiber_data(inner, literal(1))
@@ -138,11 +138,11 @@ end
         S = sparse([1, 2, 4], [1, 1, 2], [10.0, 20.0, 30.0], 5, 3)
         A = Tensor(Dense(SparseList(Element(0.0))), S)
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         inner = vfbr.lvl.lvl
         ptr = inner.ptr_data
 
-        for col in 1:(length(ptr)-1)
+        for col in 1:(length(ptr) - 1)
             s = resolve_fiber_data(inner, literal(col))
             @test s !== nothing
             @test s.start == ptr[col]
@@ -156,7 +156,7 @@ end
         S = sparse([1, 3], [1, 2], [5.0, 6.0], 4, 3)
         A = Tensor(SparseList(SparseList(Element(0.0))), S)
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         outer = vfbr.lvl
         @test outer isa VirtualSparseListLevel
         @test outer.ptr_data !== nothing
@@ -173,7 +173,7 @@ end
         S = sparse([1, 2, 3], [1, 1, 1], [1.0, 2.0, 3.0], 5, 2)
         A = Tensor(Dense(SparseList(Element(0.0))), S)
         ctx = Finch.JuliaContext()
-        vfbr = virtualize_with_data(ctx, :A, A, :tns)
+        vfbr = virtualize_concrete(ctx, :A, A, :tns)
         inner = vfbr.lvl.lvl
 
         s = resolve_fiber_data(inner, literal(1))
@@ -184,12 +184,11 @@ end
 end
 
 @testset "unfurl specialization" begin
-
     @testset "empty fiber emits Run instead of Thunk+Stepper" begin
         # Build a 1D SparseList(Element) with no nonzeros directly
         lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         # Confirm the fiber is empty
         fdata = resolve_fiber_data(vlvl, literal(1))
@@ -207,7 +206,7 @@ end
         # Build a 1D SparseList(Element) with 1 nonzero at index 3
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [7.0]), 5, [1, 2], [3])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 1
@@ -229,7 +228,7 @@ end
         # Build a 1D SparseList(Element) with 2 nonzeros at indices 2 and 4
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0]), 5, [1, 3], [2, 4])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 2
@@ -260,7 +259,7 @@ end
     @testset "3-element fiber emits unrolled Sequence with 4 phases" begin
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0, 3.0]), 7, [1, 4], [1, 4, 6])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 3
@@ -286,9 +285,11 @@ end
     end
 
     @testset "4-element fiber (at threshold) emits unrolled Sequence with 5 phases" begin
-        lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0]), 10, [1, 5], [2, 4, 7, 9])
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0]), 10, [1, 5], [2, 4, 7, 9]
+        )
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 4
@@ -312,9 +313,11 @@ end
     end
 
     @testset "5-element fiber (above threshold) emits Thunk (generic path)" begin
-        lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]), 10, [1, 6], [1, 3, 5, 7, 9])
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]), 10, [1, 6], [1, 3, 5, 7, 9]
+        )
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 5
@@ -332,7 +335,7 @@ end
             ElementLevel(0.0, [10.0, 20.0, 30.0, 40.0, 50.0]),
             10, [1, 6], [3, 4, 5, 6, 7])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 5
@@ -368,7 +371,7 @@ end
             ElementLevel(0.0, collect(1.0:6.0)),
             8, [1, 7], [1, 2, 3, 4, 5, 6])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 6
@@ -399,7 +402,7 @@ end
             ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]),
             10, [1, 6], [1, 3, 5, 7, 9])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 5
@@ -418,7 +421,7 @@ end
             ElementLevel(0.0, [1.0, 2.0, 3.0]),
             6, [1, 4], [2, 3, 4])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         fdata = resolve_fiber_data(vlvl, literal(1))
         @test length(fdata) == 3
@@ -455,11 +458,10 @@ end
 # ── gallop protocol ──────────────────────────────────────────────────────────
 
 @testset "unfurl specialization (gallop)" begin
-
     @testset "empty fiber emits Run" begin
         lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -470,7 +472,7 @@ end
     @testset "singleton fiber emits Sequence(Phase(Spike), Phase(Run))" begin
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [7.0]), 5, [1, 2], [3])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -484,7 +486,7 @@ end
     @testset "2-element fiber emits unrolled Sequence with 3 phases" begin
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0]), 5, [1, 3], [2, 4])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -503,7 +505,7 @@ end
             ElementLevel(0.0, [10.0, 20.0, 30.0, 40.0, 50.0]),
             10, [1, 6], [3, 4, 5, 6, 7])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(10))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -522,7 +524,7 @@ end
             ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]),
             10, [1, 6], [1, 3, 5, 7, 9])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(10))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -545,11 +547,10 @@ end
 # ── follow protocol ──────────────────────────────────────────────────────────
 
 @testset "unfurl specialization (follow)" begin
-
     @testset "empty fiber emits Run" begin
         lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -560,7 +561,7 @@ end
     @testset "singleton fiber emits Sequence(Phase(Spike), Phase(Run))" begin
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [7.0]), 5, [1, 2], [3])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -574,7 +575,7 @@ end
     @testset "2-element fiber emits unrolled Sequence with 3 phases" begin
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0]), 5, [1, 3], [2, 4])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -593,7 +594,7 @@ end
             ElementLevel(0.0, [10.0, 20.0, 30.0, 40.0, 50.0]),
             10, [1, 6], [3, 4, 5, 6, 7])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(10))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -612,7 +613,7 @@ end
             ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]),
             10, [1, 6], [1, 3, 5, 7, 9])
         ctx = Finch.JuliaContext()
-        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+        vlvl = virtualize_concrete(ctx, :A_lvl, lvl, :tns_lvl)
 
         ext = VirtualExtent(literal(1), literal(10))
         fbr = VirtualSubFiber(vlvl, literal(1))
@@ -629,5 +630,149 @@ end
         fbr = VirtualSubFiber(vlvl, literal(1))
         looplet = unfurl(ctx, fbr, ext, reader(), follow)
         @test looplet isa Thunk
+    end
+end
+
+# ── Integration tests: full pipeline via execute_specialized ─────────────────
+
+@testset "execute_specialized integration" begin
+    @testset "sum of 1D SparseList" begin
+        A = Tensor(SparseList(Element(0.0)), [0.0, 3.0, 0.0, 5.0, 0.0])
+        s = Scalar(0.0)
+        prgm = @finch_program_instance begin
+            s .= 0.0
+            for i in _
+                s[] += A[i]
+            end
+            return s
+        end
+        result = execute_specialized(prgm)
+        @test result[:s][] ≈ 8.0
+    end
+
+    @testset "sum of Dense(SparseList) matrix" begin
+        S = sparse([1, 3, 2], [1, 1, 2], [10.0, 20.0, 30.0], 4, 3)
+        A = Tensor(Dense(SparseList(Element(0.0))), S)
+        s = Scalar(0.0)
+        prgm = @finch_program_instance begin
+            s .= 0.0
+            for j in _, i in _
+                s[] += A[i, j]
+            end
+            return s
+        end
+        result = execute_specialized(prgm)
+        @test result[:s][] ≈ 60.0
+    end
+
+    @testset "matches execute (random sparse vector)" begin
+        v = sprand(20, 0.3)
+        A = Tensor(SparseList(Element(0.0)), v)
+        s1 = Scalar(0.0)
+        s2 = Scalar(0.0)
+        @finch begin
+            s1 .= 0.0
+            for i in _
+                s1[] += A[i]
+            end
+        end
+        prgm = @finch_program_instance begin
+            s2 .= 0.0
+            for i in _
+                s2[] += A[i]
+            end
+            return s2
+        end
+        result = execute_specialized(prgm)
+        @test result[:s2][] ≈ s1[]
+    end
+
+    @testset "matches execute (random sparse matrix)" begin
+        S = sprand(8, 5, 0.4)
+        A = Tensor(Dense(SparseList(Element(0.0))), S)
+        s1 = Scalar(0.0)
+        s2 = Scalar(0.0)
+        @finch begin
+            s1 .= 0.0
+            for j in _, i in _
+                s1[] += A[i, j]
+            end
+        end
+        prgm = @finch_program_instance begin
+            s2 .= 0.0
+            for j in _, i in _
+                s2[] += A[i, j]
+            end
+            return s2
+        end
+        result = execute_specialized(prgm)
+        @test result[:s2][] ≈ s1[]
+    end
+
+    @testset "SpMV matches execute" begin
+        S = sparse([1, 3, 2, 4], [1, 1, 2, 2], [1.0, 2.0, 3.0, 4.0], 4, 2)
+        A = Tensor(Dense(SparseList(Element(0.0))), S)
+        x = Tensor(Dense(Element(0.0)), [10.0, 20.0])
+        y1 = Tensor(Dense(Element(0.0)), zeros(4))
+        y2 = Tensor(Dense(Element(0.0)), zeros(4))
+        @finch begin
+            y1 .= 0.0
+            for j in _, i in _
+                y1[i] += A[i, j] * x[j]
+            end
+        end
+        prgm = @finch_program_instance begin
+            y2 .= 0.0
+            for j in _, i in _
+                y2[i] += A[i, j] * x[j]
+            end
+            return y2
+        end
+        result = execute_specialized(prgm)
+        for i in 1:4
+            @test result[:y2][i] ≈ y1[i]
+        end
+    end
+
+    @testset "empty tensor sums to zero" begin
+        A = Tensor(SparseList(Element(0.0)), sparse(Int[], Int[], Float64[], 5, 1)[:, 1])
+        s = Scalar(0.0)
+        prgm = @finch_program_instance begin
+            s .= 0.0
+            for i in _
+                s[] += A[i]
+            end
+            return s
+        end
+        result = execute_specialized(prgm)
+        @test result[:s][] == 0.0
+    end
+
+    @testset "singleton tensor" begin
+        A = Tensor(SparseList(Element(0.0)), sparsevec([3], [7.0], 5))
+        s = Scalar(0.0)
+        prgm = @finch_program_instance begin
+            s .= 0.0
+            for i in _
+                s[] += A[i]
+            end
+            return s
+        end
+        result = execute_specialized(prgm)
+        @test result[:s][] ≈ 7.0
+    end
+
+    @testset "Dense shape literal eliminates loop for size-1 dimension" begin
+        A = Tensor(Dense(Dense(Element(0.0))), reshape([1.0, 2.0, 3.0], 3, 1))
+        s = Scalar(0.0)
+        prgm = @finch_program_instance begin
+            s .= 0.0
+            for j in _, i in _
+                s[] += A[i, j]
+            end
+            return s
+        end
+        result = execute_specialized(prgm)
+        @test result[:s][] ≈ 6.0
     end
 end

@@ -98,6 +98,79 @@ function execute_code(
     end
 end
 
+"""
+    collect_concrete_bindings!(dict, instance)
+
+Walk a Finch program instance tree and collect concrete `Tensor` bindings from
+`TagInstance` nodes into `dict`, keyed by variable name (Symbol).
+"""
+function collect_concrete_bindings!(dict, instance)
+    if instance isa FinchNotation.TagInstance
+        var = instance.var
+        if var isa FinchNotation.VariableInstance
+            bind = instance.bind
+            if bind isa Tensor
+                dict[var.name] = bind
+            end
+        end
+    end
+    if SyntaxInterface.istree(instance)
+        for child in SyntaxInterface.arguments(instance)
+            collect_concrete_bindings!(dict, child)
+        end
+    end
+end
+
+"""
+    execute_code_specialized(ex, prgm_instance; algebra=DefaultAlgebra(), mode=:safe)
+
+Like [`execute_code`](@ref), but populates the compiler's data dictionary from
+the concrete program instance `prgm_instance` via [`collect_concrete_bindings!`](@ref),
+enabling [`virtualize_concrete`](@ref) to lift ptr/idx arrays and Dense shapes
+into the IR as literals.
+
+Returns the generated code AST (does not execute it).
+"""
+function execute_code_specialized(
+    ex,
+    prgm_instance;
+    algebra=DefaultAlgebra(),
+    mode=:safe,
+    ctx=FinchCompiler(; algebra=algebra, mode=mode),
+)
+    collect_concrete_bindings!(ctx.code.data, prgm_instance)
+    code = contain(ctx) do ctx_2
+        prgm = virtualize(ctx_2.code, ex, typeof(prgm_instance))
+        lower_global(ctx_2, prgm)
+    end
+end
+
+"""
+    execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe)
+
+Like [`execute`](@ref), but propagates concrete tensor data (ptr/idx arrays,
+Dense shapes) into the compiler via `virtualize_concrete`, enabling
+structure-aware specialization.  Does not use `@staged` caching — the kernel
+is generated and evaluated fresh each call.
+"""
+function execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe)
+    ctx = FinchCompiler(; algebra=algebra, mode=mode)
+    collect_concrete_bindings!(ctx.code.data, ex)
+    sym = freshen(ctx, :ex)
+    code = contain(ctx) do ctx_2
+        prgm = virtualize(ctx_2.code, sym, typeof(ex))
+        lower_global(ctx_2, prgm)
+    end
+    code = quote
+        $sym = $ex
+        @inbounds @fastmath $code
+    end
+    func = eval(:(function ()
+        $code
+    end))
+    Base.invokelatest(func)
+end
+
 @staged function execute_impl(ex, algebra, mode)
     code = execute_code(:ex, ex; algebra=getvalue(algebra), mode=getvalue(mode))
     if mode === :debug
@@ -121,8 +194,25 @@ end
     end
 end
 
-function execute(ex; algebra=DefaultAlgebra(), mode=:safe)
-    execute_impl(ex, Val(algebra), Val(mode))
+"""
+    execute(ex; algebra=DefaultAlgebra(), mode=:safe, specialize=false)
+
+Execute a Finch program instance `ex`.
+
+When `specialize=false` (the default), uses the `@staged` code-generation path
+which caches kernels by program type.
+
+When `specialize=true`, uses the data-aware path ([`execute_specialized`](@ref))
+which inspects concrete tensor structure (ptr/idx arrays, Dense shapes) to
+generate a kernel specialized to the specific sparsity pattern.  The kernel is
+generated and evaluated fresh each call (no caching).
+"""
+function execute(ex; algebra=DefaultAlgebra(), mode=:safe, specialize=false)
+    if specialize
+        execute_specialized(ex; algebra=algebra, mode=mode)
+    else
+        execute_impl(ex, Val(algebra), Val(mode))
+    end
 end
 
 """
@@ -172,6 +262,10 @@ sparsity information to reliably skip iterations when possible.
     - `:safe`: run the program in safe mode, with modest checks for performance and correctness.
     - `:fast`: run the program in fast mode, with no checks or warnings, this mode is for power users.
     The default is `:safe`.
+ - `specialize`: when `true`, use data-aware specialization to inspect concrete
+    tensor structure (ptr/idx arrays, Dense shapes) and generate a kernel
+    specialized to the specific sparsity pattern.  The kernel is not cached.
+    The default is `false`.
 
 See also: [`@finch_code`](@ref)
 """
@@ -228,6 +322,16 @@ macro finch_code(opts_ex...)
     length(opts_ex) >= 1 ||
         throw(ArgumentError("Expected at least one argument to @finch(opts..., ex)"))
     (opts, ex) = (opts_ex[1:(end - 1)], opts_ex[end])
+    # Separate `specialize` from the other options
+    specialize_flag = false
+    other_opts = []
+    for opt in opts
+        if opt isa Expr && opt.head === :(=) && opt.args[1] === :specialize
+            specialize_flag = opt.args[2]
+        else
+            push!(other_opts, opt)
+        end
+    end
     prgm = FinchNotation.finch_parse_instance(ex)
     prgm = quote
         $(FinchNotation.block_instance)(
@@ -242,14 +346,36 @@ macro finch_code(opts_ex...)
             ),
         )
     end
-    return quote
-        unquote_literals(
-            dataflow(
-                unresolve(pretty($execute_code(
-                    :ex, typeof($prgm); $(map(esc, opts)...)
-                ))),
-            ),
-        )
+    if specialize_flag
+        return quote
+            let _prgm = $prgm
+                unquote_literals(
+                    dataflow(
+                        unresolve(
+                            pretty(
+                                $execute_code_specialized(
+                                    :ex, _prgm; $(map(esc, other_opts)...)
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            end
+        end
+    else
+        return quote
+            unquote_literals(
+                dataflow(
+                    unresolve(
+                        pretty(
+                            $execute_code(
+                                :ex, typeof($prgm); $(map(esc, other_opts)...)
+                            )
+                        ),
+                    ),
+                ),
+            )
+        end
     end
 end
 
@@ -268,19 +394,39 @@ function finch_kernel(
     prgm;
     algebra=DefaultAlgebra(),
     mode=:safe,
+    specialize=false,
     ctx=FinchCompiler(; algebra=algebra, mode=mode),
 )
     maybe_typeof(x) = x isa Type ? x : typeof(x)
     ex = freshen(ctx, :ex)
-    code = contain(ctx) do ctx_2
-        foreach(args) do (key, val)
-            set_binding!(
-                ctx_2,
-                variable(key),
-                finch_leaf(virtualize(ctx_2.code, key, maybe_typeof(val), key)),
-            )
+    if specialize
+        # Collect concrete tensor bindings from the argument instances
+        for (key, val) in args
+            if val isa Tensor
+                ctx.code.data[key] = val
+            end
         end
-        execute_code(ex, prgm; algebra=algebra, mode=mode, ctx=ctx_2)
+        code = contain(ctx) do ctx_2
+            foreach(args) do (key, val)
+                set_binding!(
+                    ctx_2,
+                    variable(key),
+                    finch_leaf(virtualize_concrete(ctx_2.code, key, val, key)),
+                )
+            end
+            execute_code(ex, prgm; algebra=algebra, mode=mode, ctx=ctx_2)
+        end
+    else
+        code = contain(ctx) do ctx_2
+            foreach(args) do (key, val)
+                set_binding!(
+                    ctx_2,
+                    variable(key),
+                    finch_leaf(virtualize(ctx_2.code, key, maybe_typeof(val), key)),
+                )
+            end
+            execute_code(ex, prgm; algebra=algebra, mode=mode, ctx=ctx_2)
+        end
     end
     code = quote
         $ex = $prgm #TODO this is pretty messy because the whole program gets passed in as a global. However, I'm pretty sure we could do a cleanup pass to fix this, and no code currently uses globals this way anyway.

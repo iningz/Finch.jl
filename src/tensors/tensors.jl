@@ -82,8 +82,8 @@ function virtualize(ctx, ex, ::Type{<:Tensor{Lvl}}, tag=freshen(ctx, :tns)) wher
     VirtualFiber(lvl)
 end
 
-function virtualize_with_data(ctx, ex, tns_concrete::Tensor, tag=freshen(ctx, :tns))
-    lvl = virtualize_with_data(ctx, :($ex.lvl), tns_concrete.lvl, Symbol(tag, :_lvl))
+function virtualize_concrete(ctx, ex, tns_concrete::Tensor, tag=freshen(ctx, :tns))
+    lvl = virtualize_concrete(ctx, :($ex.lvl), tns_concrete.lvl, Symbol(tag, :_lvl))
     VirtualFiber(lvl)
 end
 lower(ctx::AbstractCompiler, fbr::VirtualFiber, ::DefaultStyle) = :(Tensor($(ctx(fbr.lvl))))
