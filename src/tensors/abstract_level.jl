@@ -1,6 +1,17 @@
 abstract type AbstractLevel end
 abstract type AbstractVirtualLevel end
 
+"""
+    virtualize_with_data(ctx, ex, lvl_concrete, tag=:lvl)
+
+Like `virtualize`, but receives the concrete level object so that actual array
+data (e.g. `ptr`, `idx`) can be stashed on the virtual level for inspection
+during lowering. The default fallback delegates to the standard type-based
+`virtualize`, discarding the concrete object.
+"""
+virtualize_with_data(ctx, ex, lvl_concrete::Lvl, tag=:lvl) where {Lvl} =
+    virtualize(ctx, ex, Lvl, tag)
+
 virtual_level_ndims(lvl::AbstractVirtualLevel, ctx) = length(virtual_level_size(lvl, ctx))
 
 #is_laminable_updater(lvl::AbstractVirtualLevel, ctx, ::Union{::typeof(defaultread), ::typeof(walk), ::typeof(gallop), ::typeof(follow), typeof(defaultupdate), typeof(laminate), typeof(extrude)}, protos...) = false

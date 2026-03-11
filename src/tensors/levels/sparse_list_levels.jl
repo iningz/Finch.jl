@@ -173,6 +173,8 @@ mutable struct VirtualSparseListLevel <: AbstractVirtualLevel
     qos_fill
     qos_stop
     prev_pos
+    ptr_data
+    idx_data
 end
 
 function is_level_injective(ctx, lvl::VirtualSparseListLevel)
@@ -209,7 +211,34 @@ function virtualize(
     qos_stop = freshen(ctx, tag, :_qos_stop)
     prev_pos = freshen(ctx, tag, :_prev_pos)
     VirtualSparseListLevel(
-        tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos
+        tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos, nothing, nothing
+    )
+end
+
+function virtualize_with_data(
+    ctx, ex, lvl_concrete::SparseListLevel{Ti,Ptr,Idx,Lvl}, tag=:lvl
+) where {Ti,Ptr,Idx,Lvl}
+    tag = freshen(ctx, tag)
+    ptr = freshen(ctx, tag, :_ptr)
+    idx = freshen(ctx, tag, :_idx)
+    stop = freshen(ctx, tag, :_stop)
+    push_preamble!(
+        ctx,
+        quote
+            $tag = $ex
+            $ptr = $tag.ptr
+            $idx = $tag.idx
+            $stop = $tag.shape
+        end,
+    )
+    shape = value(stop, Int)
+    lvl_2 = virtualize(ctx, :($tag.lvl), Lvl, tag)
+    qos_fill = freshen(ctx, tag, :_qos_fill)
+    qos_stop = freshen(ctx, tag, :_qos_stop)
+    prev_pos = freshen(ctx, tag, :_prev_pos)
+    VirtualSparseListLevel(
+        tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos,
+        lvl_concrete.ptr, lvl_concrete.idx
     )
 end
 function lower(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, ::DefaultStyle)
@@ -236,6 +265,8 @@ function distribute_level(
         lvl.qos_fill,
         lvl.qos_stop,
         lvl.prev_pos,
+        lvl.ptr_data,
+        lvl.idx_data,
     )
 end
 
@@ -253,6 +284,8 @@ function redistribute(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, diff)
             lvl.qos_fill,
             lvl.qos_stop,
             lvl.prev_pos,
+            lvl.ptr_data,
+            lvl.idx_data,
         ),
     )
 end
