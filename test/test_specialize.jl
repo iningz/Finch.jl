@@ -2,7 +2,8 @@ using Finch
 using Finch: virtualize_with_data, VirtualSparseListLevel, VirtualDenseLevel,
     resolve_fiber_data, SparseListFiberData, is_contiguous,
     VirtualSubFiber, VirtualExtent, unfurl, Run, Thunk, FillLeaf,
-    Sequence, Phase, Spike, Lookup, SPARSE_LIST_UNROLL_MAX
+    Sequence, Phase, Spike, Lookup, Switch, SPARSE_LIST_UNROLL_MAX,
+    gallop, follow
 using Finch.FinchNotation: literal, value, isliteral, getval, reader
 using Finch: defaultread
 using SparseArrays
@@ -416,5 +417,185 @@ end
         fbr = VirtualSubFiber(vlvl, literal(1))
         looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
         @test looplet isa Thunk  # no specialization possible
+    end
+end
+
+# ── gallop protocol ──────────────────────────────────────────────────────────
+
+@testset "unfurl specialization (gallop)" begin
+
+    @testset "empty fiber emits Run" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), gallop)
+        @test looplet isa Run
+    end
+
+    @testset "singleton fiber emits Sequence(Phase(Spike), Phase(Run))" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [7.0]), 5, [1, 2], [3])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), gallop)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 2
+        @test looplet.phases[1].body(ctx, ext) isa Spike
+        @test looplet.phases[2].body(ctx, ext) isa Run
+    end
+
+    @testset "2-element fiber emits unrolled Sequence with 3 phases" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0]), 5, [1, 3], [2, 4])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), gallop)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 3
+        @test looplet.phases[1].stop(ctx, ext) == literal(2)
+        @test looplet.phases[2].stop(ctx, ext) == literal(4)
+        @test looplet.phases[1].body(ctx, ext) isa Spike
+        @test looplet.phases[2].body(ctx, ext) isa Spike
+        @test looplet.phases[3].body(ctx, ext) isa Run
+    end
+
+    @testset "contiguous 5-element fiber emits Sequence(Run, Lookup, Run)" begin
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [10.0, 20.0, 30.0, 40.0, 50.0]),
+            10, [1, 6], [3, 4, 5, 6, 7])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(10))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), gallop)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 3
+        @test looplet.phases[1].stop(ctx, ext) == literal(2)
+        @test looplet.phases[1].body(ctx, ext) isa Run
+        @test looplet.phases[2].stop(ctx, ext) == literal(7)
+        @test looplet.phases[2].body(ctx, ext) isa Lookup
+        @test looplet.phases[3].body(ctx, ext) isa Run
+    end
+
+    @testset "non-contiguous 5-element fiber emits Thunk (generic Jumper path)" begin
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]),
+            10, [1, 6], [1, 3, 5, 7, 9])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(10))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), gallop)
+        @test looplet isa Thunk
+    end
+
+    @testset "without concrete data, generic Jumper path is used" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
+        ctx = Finch.JuliaContext()
+        vlvl = Finch.virtualize(ctx, :A_lvl, typeof(lvl), :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), gallop)
+        @test looplet isa Thunk
+    end
+end
+
+# ── follow protocol ──────────────────────────────────────────────────────────
+
+@testset "unfurl specialization (follow)" begin
+
+    @testset "empty fiber emits Run" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), follow)
+        @test looplet isa Run
+    end
+
+    @testset "singleton fiber emits Sequence(Phase(Spike), Phase(Run))" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [7.0]), 5, [1, 2], [3])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), follow)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 2
+        @test looplet.phases[1].body(ctx, ext) isa Spike
+        @test looplet.phases[2].body(ctx, ext) isa Run
+    end
+
+    @testset "2-element fiber emits unrolled Sequence with 3 phases" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0]), 5, [1, 3], [2, 4])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), follow)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 3
+        @test looplet.phases[1].stop(ctx, ext) == literal(2)
+        @test looplet.phases[2].stop(ctx, ext) == literal(4)
+        @test looplet.phases[1].body(ctx, ext) isa Spike
+        @test looplet.phases[2].body(ctx, ext) isa Spike
+        @test looplet.phases[3].body(ctx, ext) isa Run
+    end
+
+    @testset "contiguous 5-element fiber emits Sequence(Run, Lookup, Run)" begin
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [10.0, 20.0, 30.0, 40.0, 50.0]),
+            10, [1, 6], [3, 4, 5, 6, 7])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(10))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), follow)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 3
+        @test looplet.phases[1].stop(ctx, ext) == literal(2)
+        @test looplet.phases[1].body(ctx, ext) isa Run
+        @test looplet.phases[2].stop(ctx, ext) == literal(7)
+        @test looplet.phases[2].body(ctx, ext) isa Lookup
+        @test looplet.phases[3].body(ctx, ext) isa Run
+    end
+
+    @testset "non-contiguous 5-element fiber emits Thunk (generic Lookup+Switch path)" begin
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]),
+            10, [1, 6], [1, 3, 5, 7, 9])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(10))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), follow)
+        @test looplet isa Thunk
+    end
+
+    @testset "without concrete data, generic Lookup+Switch path is used" begin
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, Float64[]), 5, [1, 1], Int[])
+        ctx = Finch.JuliaContext()
+        vlvl = Finch.virtualize(ctx, :A_lvl, typeof(lvl), :tns_lvl)
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), follow)
+        @test looplet isa Thunk
     end
 end
