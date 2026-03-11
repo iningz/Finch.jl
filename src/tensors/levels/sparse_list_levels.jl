@@ -488,6 +488,41 @@ function unfurl(
                 body=(ctx, ext) -> Run(fill)
             )
             return Sequence(phases)
+        elseif is_contiguous(fdata)
+            # Contiguous-index specialization: indices form a dense range a:b.
+            # Emit Phase(Run) / Phase(Lookup) / Phase(Run) — O(1) code size
+            # regardless of nnz.  Child positions are computed at runtime as
+            # q_start + i - a, so no cascading specialization, but all ptr/idx
+            # indirection is completely eliminated.
+            fill = FillLeaf(virtual_level_fill_value(lvl))
+            Tp = postype(lvl)
+            a = fdata.indices[1]          # first index in contiguous block
+            b = fdata.indices[end]        # last index
+            q_start = fdata.start         # child pos for index a
+            tag = lvl.tag
+            my_q = freshen(ctx, tag, :_q)
+            return Sequence([
+                Phase(;
+                    stop=(ctx, ext) -> literal(a - 1),
+                    body=(ctx, ext) -> Run(fill),
+                ),
+                Phase(;
+                    stop=(ctx, ext) -> literal(b),
+                    body=(ctx, ext) -> Lookup(;
+                        body=(ctx, i) -> Thunk(;
+                            preamble=quote
+                                $my_q = $(q_start) + $(ctx(i)) - $(a)
+                            end,
+                            body=(ctx) -> Simplify(instantiate(
+                                ctx, VirtualSubFiber(lvl.lvl, value(my_q, Tp)), mode
+                            )),
+                        ),
+                    ),
+                ),
+                Phase(;
+                    body=(ctx, ext) -> Run(fill)
+                ),
+            ])
         end
     end
 

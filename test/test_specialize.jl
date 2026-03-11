@@ -2,7 +2,7 @@ using Finch
 using Finch: virtualize_with_data, VirtualSparseListLevel, VirtualDenseLevel,
     resolve_fiber_data, SparseListFiberData, is_contiguous,
     VirtualSubFiber, VirtualExtent, unfurl, Run, Thunk, FillLeaf,
-    Sequence, Phase, Spike, SPARSE_LIST_UNROLL_MAX
+    Sequence, Phase, Spike, Lookup, SPARSE_LIST_UNROLL_MAX
 using Finch.FinchNotation: literal, value, isliteral, getval, reader
 using Finch: defaultread
 using SparseArrays
@@ -291,6 +291,117 @@ end
         fbr = VirtualSubFiber(vlvl, literal(1))
         looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
         @test looplet isa Thunk  # too many nonzeros, falls back to generic
+    end
+
+    @testset "contiguous 5-element fiber emits Sequence(Run, Lookup, Run)" begin
+        # 5 contiguous nonzeros at indices 3,4,5,6,7 — above unroll threshold, contiguous
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [10.0, 20.0, 30.0, 40.0, 50.0]),
+            10, [1, 6], [3, 4, 5, 6, 7])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 5
+        @test length(fdata) > SPARSE_LIST_UNROLL_MAX
+        @test is_contiguous(fdata) == true
+
+        ext = VirtualExtent(literal(1), literal(10))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 3
+
+        # Phase 1: leading Run(fill) up to index 2
+        p1_stop = looplet.phases[1].stop(ctx, ext)
+        @test p1_stop == literal(2)   # a - 1 = 3 - 1 = 2
+        p1_body = looplet.phases[1].body(ctx, ext)
+        @test p1_body isa Run
+
+        # Phase 2: Lookup over the dense block [3..7]
+        p2_stop = looplet.phases[2].stop(ctx, ext)
+        @test p2_stop == literal(7)
+        p2_body = looplet.phases[2].body(ctx, ext)
+        @test p2_body isa Lookup
+
+        # Phase 3: trailing Run(fill)
+        p3_body = looplet.phases[3].body(ctx, ext)
+        @test p3_body isa Run
+    end
+
+    @testset "contiguous 6-element fiber emits Lookup, not unrolled Spikes" begin
+        # 6 contiguous nonzeros at indices 1..6 — well above threshold
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, collect(1.0:6.0)),
+            8, [1, 7], [1, 2, 3, 4, 5, 6])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 6
+        @test is_contiguous(fdata) == true
+
+        ext = VirtualExtent(literal(1), literal(8))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 3
+
+        # Leading fill phase stop = a - 1 = 0
+        p1_stop = looplet.phases[1].stop(ctx, ext)
+        @test p1_stop == literal(0)
+
+        # Dense block phase stop = 6
+        p2_stop = looplet.phases[2].stop(ctx, ext)
+        @test p2_stop == literal(6)
+        @test looplet.phases[2].body(ctx, ext) isa Lookup
+
+        # Trailing fill
+        @test looplet.phases[3].body(ctx, ext) isa Run
+    end
+
+    @testset "non-contiguous 5-element fiber emits Thunk (generic)" begin
+        # 5 non-contiguous nonzeros — above threshold, NOT contiguous
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [1.0, 2.0, 3.0, 4.0, 5.0]),
+            10, [1, 6], [1, 3, 5, 7, 9])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 5
+        @test is_contiguous(fdata) == false
+
+        ext = VirtualExtent(literal(1), literal(10))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
+        @test looplet isa Thunk  # falls through to generic path
+    end
+
+    @testset "contiguous 3-element fiber prefers unrolling over Lookup" begin
+        # 3 contiguous nonzeros at indices 2,3,4 — under threshold, contiguous
+        # Should use unrolling (Spikes with literal child pos) not Lookup
+        lvl = SparseListLevel{Int}(
+            ElementLevel(0.0, [1.0, 2.0, 3.0]),
+            6, [1, 4], [2, 3, 4])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 3
+        @test length(fdata) <= SPARSE_LIST_UNROLL_MAX
+        @test is_contiguous(fdata) == true
+
+        ext = VirtualExtent(literal(1), literal(6))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
+        # Should be unrolled Sequence of Spikes, not Lookup
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 4  # 3 Spikes + trailing Run
+        for k in 1:3
+            @test looplet.phases[k].body(ctx, ext) isa Spike
+        end
+        @test looplet.phases[4].body(ctx, ext) isa Run
     end
 
     @testset "without concrete data, generic path is used" begin
