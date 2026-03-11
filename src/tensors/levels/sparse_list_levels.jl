@@ -453,6 +453,27 @@ function unfurl(
         if length(fdata) == 0
             # Empty fiber: the entire dimension is fill value.
             return Run(FillLeaf(virtual_level_fill_value(lvl)))
+        elseif length(fdata) == 1
+            # Singleton fiber: one nonzero at a known index and known child pos.
+            # No Thunk, no Stepper, no runtime ptr/idx reads.
+            # The child pos is literal, enabling cascading specialization.
+            the_idx = fdata.indices[1]
+            the_q = fdata.start
+            fill = FillLeaf(virtual_level_fill_value(lvl))
+            return Sequence([
+                Phase(;
+                    stop=(ctx, ext) -> literal(the_idx),
+                    body=(ctx, ext) -> Spike(;
+                        body=fill,
+                        tail=Simplify(instantiate(
+                            ctx, VirtualSubFiber(lvl.lvl, literal(the_q)), mode
+                        )),
+                    ),
+                ),
+                Phase(;
+                    body=(ctx, ext) -> Run(fill)
+                ),
+            ])
         end
     end
 

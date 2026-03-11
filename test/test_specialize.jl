@@ -1,8 +1,10 @@
 using Finch
 using Finch: virtualize_with_data, VirtualSparseListLevel, VirtualDenseLevel,
     resolve_fiber_data, SparseListFiberData, is_contiguous,
-    VirtualSubFiber, VirtualExtent, unfurl, Run, Thunk, FillLeaf
+    VirtualSubFiber, VirtualExtent, unfurl, Run, Thunk, FillLeaf,
+    Sequence, Phase, Spike
 using Finch.FinchNotation: literal, value, isliteral, getval, reader
+using Finch: defaultread
 using SparseArrays
 using Test
 
@@ -164,11 +166,33 @@ end
         # Call unfurl at pos=literal(1) — should get Run, not the generic Thunk
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
-        looplet = unfurl(ctx, fbr, ext, reader, Finch.defaultread)
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
         @test looplet isa Run
     end
 
-    @testset "non-empty fiber still emits Thunk (generic path)" begin
+    @testset "singleton fiber emits Sequence(Phase(Spike), Phase(Run))" begin
+        # Build a 1D SparseList(Element) with 1 nonzero at index 3
+        lvl = SparseListLevel{Int}(ElementLevel(0.0, [7.0]), 5, [1, 2], [3])
+        ctx = Finch.JuliaContext()
+        vlvl = virtualize_with_data(ctx, :A_lvl, lvl, :tns_lvl)
+
+        fdata = resolve_fiber_data(vlvl, literal(1))
+        @test length(fdata) == 1
+
+        ext = VirtualExtent(literal(1), literal(5))
+        fbr = VirtualSubFiber(vlvl, literal(1))
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
+        @test looplet isa Sequence
+        @test length(looplet.phases) == 2
+        # First phase body should produce a Spike
+        phase1_body = looplet.phases[1].body(ctx, ext)
+        @test phase1_body isa Spike
+        # Second phase body should produce a Run (trailing fill)
+        phase2_body = looplet.phases[2].body(ctx, ext)
+        @test phase2_body isa Run
+    end
+
+    @testset "2-element fiber still emits Thunk (generic path)" begin
         # Build a 1D SparseList(Element) with 2 nonzeros at indices 2 and 4
         lvl = SparseListLevel{Int}(ElementLevel(0.0, [1.0, 2.0]), 5, [1, 3], [2, 4])
         ctx = Finch.JuliaContext()
@@ -179,7 +203,7 @@ end
 
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
-        looplet = unfurl(ctx, fbr, ext, reader, Finch.defaultread)
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
         @test looplet isa Thunk
     end
 
@@ -193,7 +217,7 @@ end
 
         ext = VirtualExtent(literal(1), literal(5))
         fbr = VirtualSubFiber(vlvl, literal(1))
-        looplet = unfurl(ctx, fbr, ext, reader, Finch.defaultread)
+        looplet = unfurl(ctx, fbr, ext, reader(), defaultread)
         @test looplet isa Thunk  # no specialization possible
     end
 end
