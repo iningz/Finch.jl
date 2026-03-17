@@ -45,6 +45,7 @@ variable names in the generated code of the executing environment.
     preamble::Vector{Any} = []
     epilogue::Vector{Any} = []
     task = VirtualSerialTask()
+    data::Dict{Any,Any} = Dict{Any,Any}()
 end
 
 """
@@ -112,7 +113,7 @@ function contain(f, ctx::JuliaContext; task=nothing)
     task_2 = something(task, ctx.task)
     preamble = Expr(:block)
     epilogue = Expr(:block)
-    ctx_2 = JuliaContext(ctx.namespace, preamble.args, epilogue.args, task_2)
+    ctx_2 = JuliaContext(ctx.namespace, preamble.args, epilogue.args, task_2, ctx.data)
     body = f(ctx_2)
     if epilogue == Expr(:block)
         return quote

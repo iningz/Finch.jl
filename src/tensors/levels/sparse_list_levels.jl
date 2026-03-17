@@ -173,6 +173,67 @@ mutable struct VirtualSparseListLevel <: AbstractVirtualLevel
     qos_fill
     qos_stop
     prev_pos
+    ptr_data
+    idx_data
+end
+
+"""
+    SparseListFiberData
+
+Describes the concrete iteration structure of a SparseList level at a known
+position. Extracted from `ptr_data` and `idx_data` when `pos` is a literal.
+
+Fields:
+- `start`: first position in the idx array for this fiber
+- `stop`: one past the last position (so nnz = stop - start)
+- `indices`: view into `idx_data[start:stop-1]`, the sorted nonzero indices
+"""
+struct SparseListFiberData
+    start::Int
+    stop::Int
+    indices::AbstractVector  # view into idx_data
+end
+
+Base.length(s::SparseListFiberData) = s.stop - s.start
+
+"""
+    is_contiguous(s::SparseListFiberData)
+
+Returns true if the nonzero indices form a contiguous range `a:b` with no gaps.
+"""
+function is_contiguous(s::SparseListFiberData)
+    n = length(s)
+    n <= 1 && return true
+    return s.indices[end] - s.indices[1] + 1 == n
+end
+
+"""
+    SPARSE_LIST_UNROLL_MAX
+
+Maximum number of nonzeros in a SparseList fiber for which `unfurl` will emit
+a fully unrolled `Sequence` of `Phase(Spike)` entries instead of the generic
+`Thunk(Stepper)`.  Each nonzero becomes a compile-time literal index and
+child position, enabling cascading specialization into deeper levels.
+"""
+const SPARSE_LIST_UNROLL_MAX = 4
+
+"""
+    resolve_fiber_data(lvl::VirtualSparseListLevel, pos)
+
+If `lvl` has concrete `ptr_data`/`idx_data` and `pos` is a `literal` FinchNode,
+extract and return a `SparseListFiberData` describing the fiber at that position.
+Returns `nothing` if the structure cannot be resolved (no data, or pos is not literal).
+"""
+function resolve_fiber_data(lvl::VirtualSparseListLevel, pos)
+    lvl.ptr_data === nothing && return nothing
+    lvl.idx_data === nothing && return nothing
+    !isliteral(pos) && return nothing
+    p = getval(pos)
+    (p < 1 || p >= length(lvl.ptr_data)) && return nothing
+    start = lvl.ptr_data[p]
+    stop = lvl.ptr_data[p + 1]
+    indices = @view lvl.idx_data[start:(stop - 1)]
+    return SparseListFiberData(start, stop, indices)
 end
 
 function is_level_injective(ctx, lvl::VirtualSparseListLevel)
@@ -209,7 +270,34 @@ function virtualize(
     qos_stop = freshen(ctx, tag, :_qos_stop)
     prev_pos = freshen(ctx, tag, :_prev_pos)
     VirtualSparseListLevel(
-        tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos
+        tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos, nothing, nothing
+    )
+end
+
+function virtualize_concrete(
+    ctx, ex, lvl_concrete::SparseListLevel{Ti,Ptr,Idx,Lvl}, tag=:lvl
+) where {Ti,Ptr,Idx,Lvl}
+    tag = freshen(ctx, tag)
+    ptr = freshen(ctx, tag, :_ptr)
+    idx = freshen(ctx, tag, :_idx)
+    stop = freshen(ctx, tag, :_stop)
+    push_preamble!(
+        ctx,
+        quote
+            $tag = $ex
+            $ptr = $tag.ptr
+            $idx = $tag.idx
+            $stop = $tag.shape
+        end,
+    )
+    shape = value(stop, Int)
+    lvl_2 = virtualize(ctx, :($tag.lvl), Lvl, tag)
+    qos_fill = freshen(ctx, tag, :_qos_fill)
+    qos_stop = freshen(ctx, tag, :_qos_stop)
+    prev_pos = freshen(ctx, tag, :_prev_pos)
+    VirtualSparseListLevel(
+        tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos,
+        lvl_concrete.ptr, lvl_concrete.idx,
     )
 end
 function lower(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, ::DefaultStyle)
@@ -236,6 +324,8 @@ function distribute_level(
         lvl.qos_fill,
         lvl.qos_stop,
         lvl.prev_pos,
+        lvl.ptr_data,
+        lvl.idx_data,
     )
 end
 
@@ -253,6 +343,8 @@ function redistribute(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, diff)
             lvl.qos_fill,
             lvl.qos_stop,
             lvl.prev_pos,
+            lvl.ptr_data,
+            lvl.idx_data,
         ),
     )
 end
@@ -355,6 +447,94 @@ function thaw_level!(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, pos_sto
     return lvl
 end
 
+"""
+    try_specialize_fiber(ctx, lvl, pos, mode)
+
+Attempt to produce a specialized looplet for the SparseList fiber at `pos` by
+inspecting concrete `ptr_data`/`idx_data`.  Returns `nothing` when the fiber
+cannot be resolved or no specialization applies (caller should fall through to
+the generic protocol-specific path).
+
+The returned looplet is protocol-independent: empty → `Run(fill)`,
+small-nnz → unrolled `Sequence(Spike…, Run)`, contiguous → `Sequence(Run, Lookup, Run)`.
+"""
+function try_specialize_fiber(ctx, lvl::VirtualSparseListLevel, pos, mode)
+    fdata = resolve_fiber_data(lvl, pos)
+    fdata === nothing && return nothing
+
+    if length(fdata) == 0
+        # Empty fiber: the entire dimension is fill value.
+        return Run(FillLeaf(virtual_level_fill_value(lvl)))
+    elseif length(fdata) <= SPARSE_LIST_UNROLL_MAX
+        # Small-nnz unrolling: emit one Phase(Spike) per nonzero with
+        # literal index and literal child position, then a trailing
+        # Phase(Run(fill)).  Every child pos is a compile-time literal,
+        # enabling cascading specialization into deeper levels.
+        fill = FillLeaf(virtual_level_fill_value(lvl))
+        nnz = length(fdata)
+        phases = Vector{Phase}(undef, nnz + 1)
+        for k in 1:nnz
+            k_idx = fdata.indices[k]
+            k_q = fdata.start + k - 1
+            phases[k] = Phase(;
+                stop=(ctx, ext) -> literal(k_idx),
+                body=(ctx, ext) -> Spike(;
+                    body=fill,
+                    tail=Simplify(
+                        instantiate(
+                            ctx, VirtualSubFiber(lvl.lvl, literal(k_q)), mode
+                        )
+                    ),
+                ),
+            )
+        end
+        phases[nnz + 1] = Phase(;
+            body=(ctx, ext) -> Run(fill)
+        )
+        return Sequence(phases)
+    elseif is_contiguous(fdata)
+        # Contiguous-index specialization: indices form a dense range a:b.
+        # Emit Phase(Run) / Phase(Lookup) / Phase(Run) — O(1) code size
+        # regardless of nnz.  Child positions are computed at runtime as
+        # q_start + i - a, so no cascading specialization, but all ptr/idx
+        # indirection is completely eliminated.
+        fill = FillLeaf(virtual_level_fill_value(lvl))
+        Tp = postype(lvl)
+        a = fdata.indices[1]          # first index in contiguous block
+        b = fdata.indices[end]        # last index
+        q_start = fdata.start         # child pos for index a
+        tag = lvl.tag
+        my_q = freshen(ctx, tag, :_q)
+        return Sequence([
+            Phase(;
+                stop=(ctx, ext) -> literal(a - 1),
+                body=(ctx, ext) -> Run(fill),
+            ),
+            Phase(;
+                stop=(ctx, ext) -> literal(b),
+                body=(ctx, ext) -> Lookup(;
+                    body=(ctx, i) -> Thunk(;
+                        preamble=quote
+                            $my_q = $(q_start) + $(ctx(i)) - $(a)
+                        end,
+                        body=(ctx) -> Simplify(
+                            instantiate(
+                                ctx, VirtualSubFiber(lvl.lvl, value(my_q, Tp)),
+                                mode
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            Phase(;
+                body=(ctx, ext) -> Run(fill)
+            ),
+        ])
+    end
+
+    return nothing
+end
+
 function unfurl(
     ctx,
     fbr::VirtualSubFiber{VirtualSparseListLevel},
@@ -363,6 +543,10 @@ function unfurl(
     ::Union{typeof(defaultread),typeof(walk)},
 )
     (lvl, pos) = (fbr.lvl, fbr.pos)
+
+    specialized = try_specialize_fiber(ctx, lvl, pos, mode)
+    specialized !== nothing && return specialized
+
     tag = lvl.tag
     Tp = postype(lvl)
     Ti = lvl.Ti
@@ -421,6 +605,10 @@ function unfurl(
     ctx, fbr::VirtualSubFiber{VirtualSparseListLevel}, ext, mode, ::typeof(follow)
 )
     (lvl, pos) = (fbr.lvl, fbr.pos)
+
+    specialized = try_specialize_fiber(ctx, lvl, pos, mode)
+    specialized !== nothing && return specialized
+
     tag = lvl.tag
     Tp = postype(lvl)
     my_q = freshen(ctx, tag, :_q)
@@ -451,6 +639,10 @@ function unfurl(
     ctx, fbr::VirtualSubFiber{VirtualSparseListLevel}, ext, mode, ::typeof(gallop)
 )
     (lvl, pos) = (fbr.lvl, fbr.pos)
+
+    specialized = try_specialize_fiber(ctx, lvl, pos, mode)
+    specialized !== nothing && return specialized
+
     tag = lvl.tag
     Tp = postype(lvl)
     Ti = lvl.Ti

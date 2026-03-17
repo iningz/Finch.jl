@@ -148,6 +148,21 @@ function virtualize(ctx, ex, ::Type{DenseLevel{Ti,Lvl}}, tag=:lvl) where {Ti,Lvl
     lvl_2 = virtualize(ctx, :($tag.lvl), Lvl, tag)
     VirtualDenseLevel(tag, lvl_2, Ti, shape)
 end
+
+function virtualize_concrete(
+    ctx, ex, lvl_concrete::DenseLevel{Ti,Lvl}, tag=:lvl
+) where {Ti,Lvl}
+    tag = freshen(ctx, tag)
+    push_preamble!(
+        ctx,
+        quote
+            $tag = $ex
+        end,
+    )
+    shape = literal(lvl_concrete.shape)
+    lvl_2 = virtualize_concrete(ctx, :($tag.lvl), lvl_concrete.lvl, tag)
+    VirtualDenseLevel(tag, lvl_2, Ti, shape)
+end
 function lower(ctx::AbstractCompiler, lvl::VirtualDenseLevel, ::DefaultStyle)
     quote
         $DenseLevel{$(lvl.Ti)}(
