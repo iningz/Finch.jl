@@ -177,6 +177,7 @@ if parsed_args["nprocs"] == 0
         include("suites/simple_tests.jl")
         include("suites/style_tests.jl")
         include("suites/typical_tests.jl")
+        include("suites/regularize_tests.jl")
     end
 
 else

@@ -150,6 +150,12 @@ include("tensors/levels/shard_levels.jl")
 include("tensors/levels/mutex_levels.jl")
 include("tensors/levels/pattern_levels.jl")
 include("tensors/masks.jl")
+include("Regularity/Regularity.jl")
+using .Regularity
+import .Regularity: AbstractPattern  # explicit import to disambiguate from Base.AbstractPattern
+include("transforms/regularize.jl")
+include("tensors/levels/sparse_list_regularize.jl")
+include("tensors/levels/dense_regularize.jl")
 include("tensors/abstract_combinator.jl")
 include("tensors/combinators/unfurled.jl")
 include("tensors/combinators/protocolized.jl")

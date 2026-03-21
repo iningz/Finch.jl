@@ -240,11 +240,11 @@ function lower(ctx::AbstractCompiler, root::FinchNode, ::DefaultStyle)
     elseif root.kind === assign
         @assert root.lhs.kind === access
         @assert root.lhs.mode.kind === updater
+        tns = resolve(ctx, root.lhs.tns)
         if length(root.lhs.idxs) > 0
             throw(FinchCompileError("Finch failed to completely lower an access to $tns"))
         end
         rhs = simplify(ctx, root.rhs)
-        tns = resolve(ctx, root.lhs.tns)
         return lower_assign(ctx, tns, root.lhs.mode, root.op, rhs)
     elseif root.kind === variable
         return ctx(get_binding(ctx, root))

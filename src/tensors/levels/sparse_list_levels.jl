@@ -175,6 +175,7 @@ mutable struct VirtualSparseListLevel <: AbstractVirtualLevel
     prev_pos
     ptr_data
     idx_data
+    regularity_map
 end
 
 function is_level_injective(ctx, lvl::VirtualSparseListLevel)
@@ -211,7 +212,7 @@ function virtualize(
     qos_stop = freshen(ctx, tag, :_qos_stop)
     prev_pos = freshen(ctx, tag, :_prev_pos)
     VirtualSparseListLevel(
-        tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos, nothing, nothing
+        tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos, nothing, nothing, nothing
     )
 end
 
@@ -238,7 +239,7 @@ function virtualize_concrete(
     prev_pos = freshen(ctx, tag, :_prev_pos)
     VirtualSparseListLevel(
         tag, lvl_2, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos,
-        lvl_concrete.ptr, lvl_concrete.idx,
+        lvl_concrete.ptr, lvl_concrete.idx, nothing,
     )
 end
 function lower(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, ::DefaultStyle)
@@ -267,6 +268,7 @@ function distribute_level(
         lvl.prev_pos,
         lvl.ptr_data,
         lvl.idx_data,
+        nothing,
     )
 end
 
@@ -286,6 +288,7 @@ function redistribute(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, diff)
             lvl.prev_pos,
             lvl.ptr_data,
             lvl.idx_data,
+            nothing,
         ),
     )
 end

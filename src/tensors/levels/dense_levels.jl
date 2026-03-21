@@ -250,19 +250,7 @@ function unfurl(ctx, fbr::VirtualHollowSubFiber{VirtualDenseLevel}, ext, mode, p
     )
 end
 
-function unfurl(
-    ctx,
-    trv::DenseTraversal,
-    ext,
-    mode,
-    ::Union{
-        typeof(defaultread),
-        typeof(follow),
-        typeof(defaultupdate),
-        typeof(laminate),
-        typeof(extrude),
-    },
-)
+function dense_lookup(ctx, trv, mode)
     (lvl, pos) = (trv.fbr.lvl, trv.fbr.pos)
     tag = lvl.tag
     Ti = lvl.Ti
@@ -278,6 +266,36 @@ function unfurl(
                 instantiate(ctx, trv.subfiber_ctr(lvl.lvl, value(q, lvl.Ti)), mode),
         ),
     )
+end
+
+function unfurl(
+    ctx,
+    trv::DenseTraversal,
+    ext,
+    mode,
+    ::Union{
+        typeof(defaultread),
+        typeof(follow),
+    },
+)
+    (lvl, pos) = (trv.fbr.lvl, trv.fbr.pos)
+    result = regularize_unfurl(ctx, lvl, mode, pos)
+    result !== nothing && return result
+    return dense_lookup(ctx, trv, mode)
+end
+
+function unfurl(
+    ctx,
+    trv::DenseTraversal,
+    ext,
+    mode,
+    ::Union{
+        typeof(defaultupdate),
+        typeof(laminate),
+        typeof(extrude),
+    },
+)
+    return dense_lookup(ctx, trv, mode)
 end
 
 function coalesce_level!(

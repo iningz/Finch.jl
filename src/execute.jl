@@ -84,6 +84,39 @@ function lower_global(ctx, prgm)
     end
 end
 
+"""
+    _mine_all_tensors!(prgm)
+
+Walk a virtualized Finch program AST and call `mine_regular_structure!` on
+every `VirtualFiber` found.  This runs the pre-lowering N-dimensional mining
+pass that annotates sparse levels with regularity patterns.
+
+Must be called AFTER `virtualize` / `virtualize_concrete` and BEFORE
+`lower_global`.
+"""
+function _mine_all_tensors!(prgm)
+    _walk_and_mine!(prgm)
+    return nothing
+end
+
+function _walk_and_mine!(node::FinchNode)
+    if node.kind === FinchNotation.virtual
+        v = node.val
+        if v isa VirtualFiber
+            mine_regular_structure!(v)
+        end
+    end
+    if SyntaxInterface.istree(node)
+        for child in SyntaxInterface.arguments(node)
+            _walk_and_mine!(child)
+        end
+    end
+    return nothing
+end
+
+# Also handle non-FinchNode values that might appear in the AST
+_walk_and_mine!(::Any) = nothing
+
 function execute_code(
     ex,
     T;
@@ -94,6 +127,11 @@ function execute_code(
     code = contain(ctx) do ctx_2
         prgm = nothing
         prgm = virtualize(ctx_2.code, ex, T)
+        # If concrete data is available (specialize path), run the pre-lowering
+        # N-D mining pass before lowering.
+        if !isempty(ctx_2.code.data)
+            _mine_all_tensors!(prgm)
+        end
         lower_global(ctx_2, prgm)
     end
 end
@@ -141,6 +179,7 @@ function execute_code_specialized(
     collect_concrete_bindings!(ctx.code.data, prgm_instance)
     code = contain(ctx) do ctx_2
         prgm = virtualize(ctx_2.code, ex, typeof(prgm_instance))
+        _mine_all_tensors!(prgm)
         lower_global(ctx_2, prgm)
     end
 end
@@ -150,7 +189,7 @@ end
 
 Like [`execute`](@ref), but propagates concrete tensor data (ptr/idx arrays,
 Dense shapes) into the compiler via `virtualize_concrete`, enabling
-structure-aware specialization.  Does not use `@staged` caching — the kernel
+structure-aware specialization.  Does not use `@staged` caching, the kernel
 is generated and evaluated fresh each call.
 """
 function execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe)
@@ -159,6 +198,7 @@ function execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe)
     sym = freshen(ctx, :ex)
     code = contain(ctx) do ctx_2
         prgm = virtualize(ctx_2.code, sym, typeof(ex))
+        _mine_all_tensors!(prgm)
         lower_global(ctx_2, prgm)
     end
     code = quote
@@ -370,7 +410,7 @@ macro finch_code(opts_ex...)
                         pretty(
                             $execute_code(
                                 :ex, typeof($prgm); $(map(esc, other_opts)...)
-                            )
+                            ),
                         ),
                     ),
                 ),
@@ -408,10 +448,17 @@ function finch_kernel(
         end
         code = contain(ctx) do ctx_2
             foreach(args) do (key, val)
+                virt = virtualize_concrete(ctx_2.code, key, val, key)
+                # Mine regularity before setting the binding so that
+                # evaluate_partial's get_binding! finds a VirtualFiber
+                # that already carries its regularity map.
+                if virt isa VirtualFiber
+                    mine_regular_structure!(virt)
+                end
                 set_binding!(
                     ctx_2,
                     variable(key),
-                    finch_leaf(virtualize_concrete(ctx_2.code, key, val, key)),
+                    finch_leaf(virt),
                 )
             end
             execute_code(ex, prgm; algebra=algebra, mode=mode, ctx=ctx_2)
