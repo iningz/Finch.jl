@@ -5,7 +5,7 @@
 # Dense-level implementations of the generic regularization protocol defined
 # in transforms/regularize.jl.  Contains:
 #
-#   1. Protocol methods: regularize_level_kind, regularize_child_info for
+#   1. Protocol methods: regularize_child_info for
 #      VirtualDenseLevel
 #   2. emit_looplet: type-dispatched Phase emission for (VirtualDenseLevel, Pattern)
 #
@@ -16,8 +16,6 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1.  Protocol Methods
 # ═══════════════════════════════════════════════════════════════════════════════
-
-regularize_level_kind(::VirtualDenseLevel) = :dense
 
 """
     regularize_child_info(lvl::VirtualDenseLevel)
@@ -49,7 +47,7 @@ end
 
 function emit_looplet(ctx, lvl::VirtualDenseLevel, pattern::EmptyPattern,
     mode, parent_pos, Ti)
-    dim1_range = pattern.region.ranges[1]
+    dim1_range = region(pattern)[1]
     Phase(;
         stop=(ctx, ext) -> literal(Ti(last(dim1_range))),
         body=(ctx, ext) -> Run(FillLeaf(virtual_level_fill_value(lvl))),
@@ -63,7 +61,7 @@ end
 
 function emit_looplet(ctx, lvl::VirtualDenseLevel, pattern::OpaquePattern,
     mode, parent_pos, Ti)
-    dim1_range = pattern.region.ranges[1]
+    dim1_range = region(pattern)[1]
     tag = lvl.tag
     q = freshen(ctx, tag, :_q)
     Phase(;
@@ -88,7 +86,7 @@ end
 
 function emit_looplet(ctx, lvl::VirtualDenseLevel, pattern::AbstractPattern,
     mode, parent_pos, Ti)
-    dim1_range = pattern.region.ranges[1]
+    dim1_range = region(pattern)[1]
     sparse_lvl = lvl.lvl
     Phase(;
         stop=(ctx, ext) -> literal(Ti(last(dim1_range))),

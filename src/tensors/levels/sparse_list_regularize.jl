@@ -3,7 +3,6 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # SparseList-specific implementations of the regularization protocol:
-#   - regularize_level_kind: identifies SparseList as :sparse
 #   - regularize_sparse_data: exposes concrete ptr/idx for mining
 #   - emit_looplet: dispatched by (VirtualSparseListLevel, PatternType) pairs
 #
@@ -17,8 +16,6 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # SparseList protocol methods
 # ═══════════════════════════════════════════════════════════════════════════════
-
-regularize_level_kind(::VirtualSparseListLevel) = :sparse
 
 """
     regularize_sparse_data(lvl::VirtualSparseListLevel)
@@ -181,7 +178,7 @@ function emit_looplet(ctx, child_lvl::VirtualSparseListLevel,
     delta = pattern.delta
     tag = child_lvl.tag
     Tp = postype(child_lvl)
-    outer_start = first(pattern.region.ranges[1])
+    outer_start = first(region(pattern)[1])
 
     q_affine = freshen(ctx, tag, :_qa)
     blk_lo = freshen(ctx, tag, :_ablo)

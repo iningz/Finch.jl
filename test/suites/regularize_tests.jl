@@ -55,11 +55,11 @@
         # Total miner: col 1 → Opaque, cols 2-4 → Empty, cols 5-6 → Opaque
         @test length(patterns) == 3
         @test patterns[1] isa Finch.OpaquePattern
-        @test patterns[1].region.ranges[1] == 1:1
+        @test Finch.Regularity.region(patterns[1])[1] == 1:1
         @test patterns[2] isa Finch.EmptyPattern
-        @test patterns[2].region.ranges[1] == 2:4
+        @test Finch.Regularity.region(patterns[2])[1] == 2:4
         @test patterns[3] isa Finch.OpaquePattern
-        @test patterns[3].region.ranges[1] == 5:6
+        @test Finch.Regularity.region(patterns[3])[1] == 5:6
     end
 
     @testset "mine_nd: all empty" begin
@@ -67,7 +67,7 @@
         child = A.lvl.lvl
         patterns = Finch.Regularity.mine_nd(child.ptr, child.idx, [5])
         @test length(patterns) == 1
-        @test patterns[1].region.ranges[1] == 1:5
+        @test Finch.Regularity.region(patterns[1])[1] == 1:5
         @test patterns[1] isa Finch.EmptyPattern
     end
 
@@ -92,10 +92,10 @@
         patterns2 = Finch.Regularity.mine_nd(child.ptr, child.idx, [4])
         empty_patterns = filter(g -> g isa Finch.EmptyPattern, patterns2)
         @test length(empty_patterns) == 1
-        @test empty_patterns[1].region.ranges[1] == 2:3
+        @test Finch.Regularity.region(empty_patterns[1])[1] == 2:3
 
         # Raise EmptyMiner threshold to 3: the 2-column run is too short
-        passes3 = Finch.AbstractMiningPass[
+        passes3 = Finch.AbstractMiner[
             Finch.EmptyMiner(; region_threshold=3),
             Finch.AffineMiner(),
             Finch.ContiguousMiner(),
@@ -116,7 +116,7 @@
         patterns = Finch.Regularity.mine_nd(child.ptr, child.idx, [4])
         id_patterns = filter(g -> g isa Finch.IdenticalRelativePattern, patterns)
         @test length(id_patterns) == 1
-        @test id_patterns[1].region.ranges[1] == 1:4
+        @test Finch.Regularity.region(id_patterns[1])[1] == 1:4
         @test id_patterns[1].indices == [1, 3]
     end
 
@@ -132,7 +132,7 @@
         aff_patterns = filter(g -> g isa Finch.AffinePattern, patterns)
         @test length(aff_patterns) == 1
         g = aff_patterns[1]
-        @test g.region.ranges[1] == 1:4
+        @test Finch.Regularity.region(g)[1] == 1:4
         @test g.nnz == 2
         @test g.delta == 1
     end
@@ -168,7 +168,7 @@
         patterns = Finch.mine_nd(ptr, idx, [5])
         @test length(patterns) >= 1
         @test patterns[1] isa Finch.EmptyPattern
-        @test patterns[1].region.ranges[1] == 1:5
+        @test Finch.Regularity.region(patterns[1])[1] == 1:5
     end
 
     @testset "mine_nd returns empty for multi-D" begin

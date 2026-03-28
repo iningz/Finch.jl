@@ -13,24 +13,26 @@ Every fiber stores a contiguous block of width `nnz`, whose starting index
 shifts linearly: `start(p) = base_first + (p - outer_start) * delta`.
 
 ## Fields
-- `region::PatternRegion`
+- `ranges::Vector{UnitRange{Int}}`
 - `base_first::Int` - starting index at the first fiber in the region
 - `delta::Int`      - shift in starting index per fiber step
 - `nnz::Int`        - number of stored indices per fiber
 """
 struct AffinePattern <: AbstractPattern
-    region::PatternRegion
+    ranges::Vector{UnitRange{Int}}
     base_first::Int
     delta::Int
     nnz::Int
 end
 
-struct AffineMiner <: AbstractMiningPass
+region(p::AffinePattern) = p.ranges
+
+struct AffineMiner <: AbstractMiner
     region_threshold::Int
 end
 AffineMiner(; region_threshold::Int=2) = AffineMiner(region_threshold)
 
-function mine_pass(pass::AffineMiner, fibers::Vector{FiberSpan},
+function mine_pass(pass::AffineMiner, fibers::Vector{<:AbstractFiberView},
     unclaimed::BitVector)
     region_threshold = pass.region_threshold
     patterns = AbstractPattern[]
@@ -71,7 +73,7 @@ function mine_pass(pass::AffineMiner, fibers::Vector{FiberSpan},
                             push!(
                                 patterns,
                                 AffinePattern(
-                                    PatternRegion([k:run_end]),
+                                    [k:run_end],
                                     fiber_first(f), delta, n),
                             )
                             k = _next_unclaimed(unclaimed, run_end + 1)

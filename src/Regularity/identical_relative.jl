@@ -11,20 +11,22 @@
 Every fiber stores the same sparse (non-contiguous) index set.
 
 ## Fields
-- `region::PatternRegion`
+- `ranges::Vector{UnitRange{Int}}`
 - `indices::Vector{Int}` - the shared index set
 """
 struct IdenticalRelativePattern <: AbstractPattern
-    region::PatternRegion
+    ranges::Vector{UnitRange{Int}}
     indices::Vector{Int}
 end
 
-struct IdenticalRelativeMiner <: AbstractMiningPass
+region(p::IdenticalRelativePattern) = p.ranges
+
+struct IdenticalRelativeMiner <: AbstractMiner
     region_threshold::Int
 end
 IdenticalRelativeMiner(; region_threshold::Int=2) = IdenticalRelativeMiner(region_threshold)
 
-function mine_pass(pass::IdenticalRelativeMiner, fibers::Vector{FiberSpan},
+function mine_pass(pass::IdenticalRelativeMiner, fibers::Vector{<:AbstractFiberView},
     unclaimed::BitVector)
     region_threshold = pass.region_threshold
     patterns = AbstractPattern[]
@@ -43,10 +45,10 @@ function mine_pass(pass::IdenticalRelativeMiner, fibers::Vector{FiberSpan},
             end
             rlen = run_end - k + 1
             if rlen >= region_threshold
-                indices = Int.(collect(fiber_indices(f)))
+                idx_set = Int.(collect(indices(f)))
                 push!(
                     patterns, IdenticalRelativePattern(
-                        PatternRegion([k:run_end]), indices)
+                        [k:run_end], idx_set)
                 )
                 k = _next_unclaimed(unclaimed, run_end + 1)
                 continue

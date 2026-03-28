@@ -11,15 +11,17 @@
 All fibers in the region have nnz == 0.
 """
 struct EmptyPattern <: AbstractPattern
-    region::PatternRegion
+    ranges::Vector{UnitRange{Int}}
 end
 
-struct EmptyMiner <: AbstractMiningPass
+region(p::EmptyPattern) = p.ranges
+
+struct EmptyMiner <: AbstractMiner
     region_threshold::Int
 end
 EmptyMiner(; region_threshold::Int=2) = EmptyMiner(region_threshold)
 
-function mine_pass(pass::EmptyMiner, fibers::Vector{FiberSpan},
+function mine_pass(pass::EmptyMiner, fibers::Vector{<:AbstractFiberView},
     unclaimed::BitVector)
     region_threshold = pass.region_threshold
     patterns = AbstractPattern[]
@@ -33,7 +35,7 @@ function mine_pass(pass::EmptyMiner, fibers::Vector{FiberSpan},
                 run_end += 1
             end
             if run_end - k + 1 >= region_threshold
-                push!(patterns, EmptyPattern(PatternRegion([k:run_end])))
+                push!(patterns, EmptyPattern([k:run_end]))
                 k = _next_unclaimed(unclaimed, run_end + 1)
                 continue
             end

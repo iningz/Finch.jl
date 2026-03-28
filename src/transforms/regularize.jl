@@ -30,16 +30,6 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    regularize_level_kind(lvl::AbstractVirtualLevel) -> Symbol
-
-Return the structural role of this level for regularization purposes:
-- `:dense`: statically addressable parent (Dense-like): maps (pos, i) -> child_pos directly
-- `:sparse`: minable child: has concrete ptr/idx data that can be analyzed
-- `:opaque`: neither (default)
-"""
-regularize_level_kind(::AbstractVirtualLevel) = :opaque
-
-"""
     regularize_child_info(lvl::AbstractVirtualLevel)
 
 For a dense-like parent level, return a NamedTuple describing its structure:
@@ -183,7 +173,7 @@ function regularize_unfurl(ctx, lvl, mode, pos)
 
     # The miner is total: every position is covered by some pattern
     # (specialized passes + OpaquePattern for the rest).
-    sorted_patterns = sort(patterns; by=p -> first(p.region.ranges[1]))
+    sorted_patterns = sort(patterns; by=p -> first(region(p)[1]))
     phases = Phase[]
 
     for pattern in sorted_patterns

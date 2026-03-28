@@ -11,22 +11,24 @@
 Every fiber stores the same contiguous block `[first_idx .. first_idx+nnz-1]`.
 
 ## Fields
-- `region::PatternRegion`
+- `ranges::Vector{UnitRange{Int}}`
 - `first_idx::Int` - starting index of the block
 - `nnz::Int`       - number of stored indices per fiber
 """
 struct ContiguousPattern <: AbstractPattern
-    region::PatternRegion
+    ranges::Vector{UnitRange{Int}}
     first_idx::Int
     nnz::Int
 end
 
-struct ContiguousMiner <: AbstractMiningPass
+region(p::ContiguousPattern) = p.ranges
+
+struct ContiguousMiner <: AbstractMiner
     region_threshold::Int
 end
 ContiguousMiner(; region_threshold::Int=2) = ContiguousMiner(region_threshold)
 
-function mine_pass(pass::ContiguousMiner, fibers::Vector{FiberSpan},
+function mine_pass(pass::ContiguousMiner, fibers::Vector{<:AbstractFiberView},
     unclaimed::BitVector)
     region_threshold = pass.region_threshold
     patterns = AbstractPattern[]
@@ -47,7 +49,7 @@ function mine_pass(pass::ContiguousMiner, fibers::Vector{FiberSpan},
             rlen = run_end - k + 1
             if rlen >= region_threshold
                 push!(patterns, ContiguousPattern(
-                    PatternRegion([k:run_end]), fi, n))
+                    [k:run_end], fi, n))
                 k = _next_unclaimed(unclaimed, run_end + 1)
                 continue
             end
