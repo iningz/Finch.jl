@@ -232,7 +232,7 @@ function virtualize_concrete(
             $stop = $tag.shape
         end,
     )
-    shape = value(stop, Int)
+    shape = literal(lvl_concrete.shape)
     lvl_2 = virtualize(ctx, :($tag.lvl), Lvl, tag)
     qos_fill = freshen(ctx, tag, :_qos_fill)
     qos_stop = freshen(ctx, tag, :_qos_stop)
