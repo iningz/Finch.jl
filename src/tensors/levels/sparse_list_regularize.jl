@@ -113,8 +113,15 @@ end
 
 # ── IdenticalRelativePattern ─────────────────────────────────────────────────
 #
-# Every fiber stores the same sparse index set `indices`.  Emit an unrolled
-# Sequence of Spikes at the known positions.
+# Every fiber stores the same sparse index set `indices`.  Consecutive
+# stored indices are coalesced into contiguous Lookup phases (like
+# ContiguousPattern) to reduce the total phase count.  Non-consecutive
+# gaps get a Run(fill) phase.
+#
+# Example: indices = [1,2,3,4,5,6,8,9,10,11,12,13,15,18,20]
+# Runs:    [1..6], [8..13], [15], [18], [20]
+# Emitted: 5 Lookup phases + up to 5 gap phases + 1 trailing = ~11 phases
+# (vs. 30 phases with the naive one-point-per-index approach)
 
 function emit_looplet(ctx, child_lvl::VirtualSparseListLevel,
     pattern::IdenticalRelativePattern, mode, parent_pos, Ti)
@@ -123,28 +130,58 @@ function emit_looplet(ctx, child_lvl::VirtualSparseListLevel,
     tag = child_lvl.tag
     Tp = postype(child_lvl)
 
-    q_ident = freshen(ctx, tag, :_qi)
+    # Split indices into maximal contiguous runs.
+    # Each run is (first_offset, first_idx, last_idx) where offset is
+    # the 0-based position in the ptr/idx array.
+    runs = Tuple{Int,Int,Int}[]
+    run_start_offset = 0
+    run_start_idx = indices[1]
+    for k in 2:length(indices)
+        if indices[k] == indices[k - 1] + 1
+            continue  # extend current run
+        else
+            push!(runs, (run_start_offset, run_start_idx, indices[k - 1]))
+            run_start_offset = k - 1
+            run_start_idx = indices[k]
+        end
+    end
+    push!(runs, (run_start_offset, run_start_idx, indices[end]))
 
     phases = Phase[]
+    prev_idx = 0
 
-    for (offset, row_idx) in enumerate(indices)
-        let offset = offset, row_idx = row_idx
+    for (run_offset, first_idx, last_idx) in runs
+        let run_offset = run_offset, first_idx = first_idx, last_idx = last_idx
+            q_run = freshen(ctx, tag, :_qi)
+
+            # Gap phase covering fill positions before this run
+            if first_idx > prev_idx + 1
+                push!(
+                    phases,
+                    Phase(;
+                        stop=(ctx, ext) -> literal(Ti(first_idx - 1)),
+                        body=(ctx, ext) -> Run(fill_leaf),
+                    ),
+                )
+            end
+
+            # Contiguous Lookup phase for this run
             push!(
                 phases,
                 Phase(;
-                    stop=(ctx, ext) -> literal(Ti(row_idx)),
-                    body=(ctx, ext) -> Thunk(;
-                        preamble=quote
-                            $q_ident =
-                                $(child_lvl.ptr)[$(ctx(parent_pos))] +
-                                $(offset - 1)
-                        end,
-                        body=(ctx) -> Spike(;
-                            body=fill_leaf,
-                            tail=Simplify(
+                    stop=(ctx, ext) -> literal(Ti(last_idx)),
+                    body=(ctx, ext) -> Lookup(;
+                        body=(ctx, i) -> Thunk(;
+                            preamble=quote
+                                $q_run =
+                                    $(child_lvl.ptr)[$(ctx(parent_pos))] +
+                                    $(run_offset) +
+                                    $(ctx(i)) - $(Ti(first_idx))
+                            end,
+                            body=(ctx) -> Simplify(
                                 instantiate(
                                     ctx,
-                                    VirtualSubFiber(child_lvl.lvl, value(q_ident, Tp)),
+                                    VirtualSubFiber(child_lvl.lvl, value(q_run, Tp)),
                                     mode,
                                 ),
                             ),
@@ -153,6 +190,7 @@ function emit_looplet(ctx, child_lvl::VirtualSparseListLevel,
                 ),
             )
         end
+        prev_idx = last_idx
     end
 
     # trailing fill

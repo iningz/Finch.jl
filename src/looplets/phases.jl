@@ -93,7 +93,7 @@ function lower(ctx::AbstractCompiler, root::FinchNode, style::PhaseStyle)
             $i = $(ctx(getstop(ext_4))) + $(ctx(getunit(ext_4)))
         end
 
-        if prove(ctx, call(>=, measure(ext_4), 0))
+        if prove(ctx, call(>=, measure(ext_4), get_smallest_measure(ext_4)))
             return body
         else
             return quote

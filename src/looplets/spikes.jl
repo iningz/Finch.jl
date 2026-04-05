@@ -59,12 +59,24 @@ function lower(ctx::AbstractCompiler, root::FinchNode, ::SpikeStyle)
         )(
             root.body
         )
-        tail_expr = contain(ctx) do ctx_2
-            (ctx_2)(loop(
-                root.idx,
-                tail_ext,
-                root_tail,
-            ))
+        # Guard: only emit the tail if the extent is non-empty.
+        if prove(ctx, call(>, getstart(root.ext), getstop(root.ext)))
+            tail_expr = quote end
+        else
+            tail_expr = contain(ctx) do ctx_2
+                (ctx_2)(loop(
+                    root.idx,
+                    tail_ext,
+                    root_tail,
+                ))
+            end
+            if !prove(ctx, call(<=, getstart(root.ext), getstop(root.ext)))
+                tail_expr = quote
+                    if $(ctx(getstop(root.ext))) >= $(ctx(getstart(root.ext)))
+                        $tail_expr
+                    end
+                end
+            end
         end
         return Expr(:block, body_expr, tail_expr)
     else
