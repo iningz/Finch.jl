@@ -23,6 +23,7 @@ using Preferences
 using UnsafeAtomics
 
 export @finch, @finch_program, @finch_code, @finch_kernel, value
+export execute_specialized
 
 export Tensor
 export DenseFormat,
@@ -158,6 +159,8 @@ include("tensors/combinators/windowed.jl")
 include("tensors/combinators/swizzle.jl")
 include("tensors/combinators/scale.jl")
 include("tensors/combinators/product.jl")
+
+include("regularize_hooks.jl")
 
 const Sparse = SparseDictLevel
 const SparseLevel = SparseDictLevel

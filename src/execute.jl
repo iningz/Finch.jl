@@ -63,6 +63,15 @@ function lower_global(ctx, prgm)
     prgm = exit_on_yieldbind(prgm)
     prgm = enforce_scopes(prgm)
     prgm = evaluate_partial(ctx, prgm)
+    # Give an extension a deterministic pre-lowering view of every bound tensor.
+    # Concrete storage is available only when a specialized entry point stashed
+    # it on the virtual levels.
+    for var in sort!(collect(keys(ctx.scope.bindings)); by=string)
+        bound = ctx.scope.bindings[var]
+        if bound.kind === virtual && bound.val isa VirtualFiber
+            mine_regular_structure!(ctx, bound.val)
+        end
+    end
     code = contain(ctx) do ctx_2
         quote
             $(
@@ -90,12 +99,55 @@ function execute_code(
     algebra=DefaultAlgebra(),
     mode=:safe,
     ctx=FinchCompiler(; algebra=algebra, mode=mode),
+    specialize=false,
+    concrete=nothing,
 )
     code = contain(ctx) do ctx_2
         prgm = nothing
         prgm = virtualize(ctx_2.code, ex, T)
+        if specialize && concrete !== nothing
+            attach_concrete!(prgm, concrete, false)
+        end
         lower_global(ctx_2, prgm)
     end
+end
+
+"""
+    attach_concrete!(prgm, instance, reusable)
+
+Match tensor bindings in virtual program `prgm` with concrete tensors in
+`instance`, then attach each concrete level chain to its virtual counterpart.
+`reusable=false` means the kernel is regenerated for this call and needs no
+freshness guard. `finch_kernel` passes `true` because its generated function may
+be called again.
+"""
+function attach_concrete!(prgm, instance, reusable::Bool)
+    tensors = Dict{Symbol,Tensor}()
+    collect_concrete_tensors!(tensors, instance)
+    for node in PostOrderDFS(prgm)
+        if node isa FinchNode && node.kind === tag &&
+            node.var.kind === variable && node.bind.kind === virtual &&
+            node.bind.val isa VirtualFiber
+            tns = get(tensors, node.var.name, nothing)
+            tns === nothing || stash_concrete!(node.bind.val.lvl, tns.lvl, reusable)
+        end
+    end
+    prgm
+end
+
+function collect_concrete_tensors!(tensors::Dict{Symbol,Tensor}, instance)
+    if instance isa FinchNotation.TagInstance &&
+        instance.var isa FinchNotation.VariableInstance &&
+        instance.bind isa Tensor
+        tensors[instance.var.name] = instance.bind
+    end
+    if SyntaxInterface.istree(instance)
+        foreach(
+            child -> collect_concrete_tensors!(tensors, child),
+            SyntaxInterface.arguments(instance),
+        )
+    end
+    tensors
 end
 
 @staged function execute_impl(ex, algebra, mode)
@@ -121,8 +173,36 @@ end
     end
 end
 
-function execute(ex; algebra=DefaultAlgebra(), mode=:safe)
-    execute_impl(ex, Val(algebra), Val(mode))
+function execute(ex; algebra=DefaultAlgebra(), mode=:safe, specialize=false)
+    if specialize
+        execute_specialized(ex; algebra=algebra, mode=mode)
+    else
+        execute_impl(ex, Val(algebra), Val(mode))
+    end
+end
+
+"""
+    execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe)
+
+Like [`execute`](@ref), but make concrete tensor structure available to a
+loaded specialization extension. A fresh kernel is generated on every call,
+outside the per-type `@staged` cache, so a structure-specific kernel cannot be
+reused for another tensor merely because its type matches. This per-call path
+does not need a runtime freshness guard.
+"""
+function execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe)
+    ctx = FinchCompiler(; algebra=algebra, mode=mode)
+    sym = freshen(ctx, :ex)
+    code = execute_code(
+        sym, typeof(ex); algebra=algebra, mode=mode, ctx=ctx,
+        specialize=true, concrete=ex,
+    )
+    code = quote
+        $sym = $ex
+        @inbounds @fastmath $code
+    end
+    thunk = eval(:(() -> $code))
+    Base.invokelatest(thunk)
 end
 
 """
@@ -243,13 +323,19 @@ macro finch_code(opts_ex...)
         )
     end
     return quote
-        unquote_literals(
-            dataflow(
-                unresolve(pretty($execute_code(
-                    :ex, typeof($prgm); $(map(esc, opts)...)
-                ))),
-            ),
-        )
+        let prgm = $prgm
+            unquote_literals(
+                dataflow(
+                    unresolve(
+                        pretty(
+                            $execute_code(
+                                :ex, typeof(prgm); concrete=prgm, $(map(esc, opts)...)
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        end
     end
 end
 
@@ -268,22 +354,30 @@ function finch_kernel(
     prgm;
     algebra=DefaultAlgebra(),
     mode=:safe,
+    specialize=false,
     ctx=FinchCompiler(; algebra=algebra, mode=mode),
 )
     maybe_typeof(x) = x isa Type ? x : typeof(x)
     ex = freshen(ctx, :ex)
     code = contain(ctx) do ctx_2
         foreach(args) do (key, val)
+            virt = virtualize(ctx_2.code, key, maybe_typeof(val), key)
+            if specialize && val isa Tensor && virt isa VirtualFiber
+                # The generated function can be called again, so mark its
+                # concrete structure as reusable and require a freshness guard.
+                stash_concrete!(virt.lvl, val.lvl, true)
+            end
             set_binding!(
                 ctx_2,
                 variable(key),
-                finch_leaf(virtualize(ctx_2.code, key, maybe_typeof(val), key)),
+                finch_leaf(virt),
             )
         end
         execute_code(ex, prgm; algebra=algebra, mode=mode, ctx=ctx_2)
     end
     code = quote
-        $ex = $prgm #TODO this is pretty messy because the whole program gets passed in as a global. However, I'm pretty sure we could do a cleanup pass to fix this, and no code currently uses globals this way anyway.
+        # Bind the program once before executing the generated body.
+        $ex = $prgm
         $code
     end
     code = unquote_literals(dataflow(unresolve(pretty(code))))

@@ -26,12 +26,14 @@ UnsafeAtomics = "013be700-e6cd-48c3-b4a1-df204f14c38f"
 [weakdeps]
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 NPZ = "15e1cf62-19b3-5cfa-8e77-841668bca605"
+Regularity = "7c1e9d52-4b3a-4f96-8e21-d0a5c47b93ae"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 TensorMarket = "8b7d4fe7-0b45-4d0d-9dd8-5cc9b23b4b77"
 
 [extensions]
 HDF5Ext = "HDF5"
 NPZExt = "NPZ"
+RegularityExt = "Regularity"
 SparseArraysExt = "SparseArrays"
 TensorMarketExt = "TensorMarket"
 
@@ -47,6 +49,7 @@ JSON = "1.2"
 NPZ = "0.4"
 PrecompileTools = "1"
 Preferences = "v1.4.3"
+Regularity = "0.3"
 Requires = "1"
 RewriteTools = "0.2.4"
 Statistics = "1"

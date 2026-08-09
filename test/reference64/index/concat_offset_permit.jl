@@ -17,6 +17,7 @@ begin
     B_lvl_stop = B_lvl.shape
     B_lvl_2 = B_lvl.lvl
     B_lvl_2_val = B_lvl_2.val
+    Finch.touch_structure!(C_lvl_ptr)
     C_lvl_qos_stop = 0
     Finch.resize_if_smaller!(C_lvl_ptr, 1 + 1)
     Finch.fill_range!(C_lvl_ptr, 0, 1 + 1, 1 + 1)
@@ -378,6 +379,7 @@ begin
         end
     end
     C_lvl_ptr[1 + 1] += (C_lvl_qos - 0) - 1
+    Finch.touch_structure!(C_lvl_ptr)
     resize!(C_lvl_ptr, 1 + 1)
     for p = 1:1
         C_lvl_ptr[p + 1] += C_lvl_ptr[p]

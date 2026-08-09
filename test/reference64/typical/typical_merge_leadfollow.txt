@@ -23,6 +23,7 @@ quote
     y_lvl_2 = y_lvl.lvl
     y_lvl_2_val = y_lvl_2.val
     y_lvl_stop == x_lvl_stop || throw(DimensionMismatch("mismatched dimension limits ($(y_lvl_stop) != $(x_lvl_stop))"))
+    Finch.touch_structure!(z_lvl_ptr)
     z_lvl_qos_stop = 0
     Finch.resize_if_smaller!(z_lvl_ptr, 1 + 1)
     Finch.fill_range!(z_lvl_ptr, 0, 1 + 1, 1 + 1)
@@ -288,6 +289,7 @@ quote
         end
     end
     z_lvl_ptr[1 + 1] += (z_lvl_qos - 0) - 1
+    Finch.touch_structure!(z_lvl_ptr)
     resize!(z_lvl_ptr, 1 + 1)
     for p = 1:1
         z_lvl_ptr[p + 1] += z_lvl_ptr[p]

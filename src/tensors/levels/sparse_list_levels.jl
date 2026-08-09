@@ -173,6 +173,14 @@ mutable struct VirtualSparseListLevel <: AbstractVirtualLevel
     qos_fill
     qos_stop
     prev_pos
+    concrete    # `ConcreteStash` from a specialized entry point, or `nothing`.
+    regularity  # Per-tensor extension state, or `nothing`.
+end
+
+function VirtualSparseListLevel(tag, lvl, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos)
+    VirtualSparseListLevel(
+        tag, lvl, Ti, ptr, idx, shape, qos_fill, qos_stop, prev_pos, nothing, nothing
+    )
 end
 
 function is_level_injective(ctx, lvl::VirtualSparseListLevel)
@@ -276,12 +284,13 @@ virtual_level_fill_value(lvl::VirtualSparseListLevel) = virtual_level_fill_value
 postype(lvl::VirtualSparseListLevel) = postype(lvl.lvl)
 
 function declare_level!(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, pos, init)
-    #TODO check that init == fill_value
+    # SparseList initialization requires `init` to equal the nested fill value.
     Ti = lvl.Ti
     Tp = postype(lvl)
     push_preamble!(
         ctx,
         quote
+            Finch.touch_structure!($(lvl.ptr))
             $(lvl.qos_fill) = $(Tp(0))
             $(lvl.qos_stop) = $(Tp(0))
         end,
@@ -314,6 +323,7 @@ function freeze_level!(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, pos_s
     push_preamble!(
         ctx,
         quote
+            Finch.touch_structure!($(lvl.ptr))
             resize!($(lvl.ptr), $pos_stop + 1)
             for $p in 1:($pos_stop)
                 $(lvl.ptr)[$p + 1] += $(lvl.ptr)[$p]
@@ -333,6 +343,7 @@ function thaw_level!(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, pos_sto
     push_preamble!(
         ctx,
         quote
+            Finch.touch_structure!($(lvl.ptr))
             $(lvl.qos_fill) = $(lvl.ptr)[$pos_stop + 1] - 1
             $(lvl.qos_stop) = $(lvl.qos_fill)
             $qos_stop = $(lvl.qos_fill)
@@ -360,7 +371,22 @@ function unfurl(
     fbr::VirtualSubFiber{VirtualSparseListLevel},
     ext,
     mode,
-    ::Union{typeof(defaultread),typeof(walk)},
+    proto::Union{typeof(defaultread),typeof(walk)},
+)
+    specialized = regularize_unfurl(ctx, fbr, ext, mode, proto)
+    specialized === nothing || return specialized
+    unfurl_sparse_list_walk(ctx, fbr, ext, mode, proto)
+end
+
+# The native sequential walk has its own name so an Opaque phase can re-enter
+# it directly. Both paths therefore use the same sparse traversal code, with no
+# re-consultation of the hook (which would re-realize and recurse).
+function unfurl_sparse_list_walk(
+    ctx,
+    fbr::VirtualSubFiber{VirtualSparseListLevel},
+    ext,
+    mode,
+    proto::Union{typeof(defaultread),typeof(walk)},
 )
     (lvl, pos) = (fbr.lvl, fbr.pos)
     tag = lvl.tag

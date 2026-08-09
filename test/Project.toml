@@ -20,6 +20,7 @@ Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 ReTestItems = "817f1d60-ba6b-4fd5-9520-3cf149f6a823"
+Regularity = "7c1e9d52-4b3a-4f96-8e21-d0a5c47b93ae"
 Requires = "ae029012-a4dd-5104-9daa-d747884805df"
 RewriteTools = "5969e224-3634-4c61-9f66-721b69e98b8a"
 SimpleWeightedGraphs = "47aef6b3-ad0c-573a-a1e2-d07658019622"
@@ -34,3 +35,6 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 [compat]
 JuliaFormatter = "1.0.62"
 Pkg = "1.10.0"
+
+[sources]
+Regularity = {path = "../../Regularity"}

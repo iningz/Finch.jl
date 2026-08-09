@@ -120,6 +120,12 @@ mutable struct VirtualDenseLevel <: AbstractVirtualLevel
     lvl
     Ti
     shape
+    concrete    # `ConcreteStash` from a specialized entry point, or `nothing`.
+    regularity  # Per-tensor extension state, or `nothing`.
+end
+
+function VirtualDenseLevel(tag, lvl, Ti, shape)
+    VirtualDenseLevel(tag, lvl, Ti, shape, nothing, nothing)
 end
 
 function is_level_injective(ctx, lvl::VirtualDenseLevel)
@@ -223,6 +229,8 @@ struct DenseTraversal
 end
 
 function unfurl(ctx, fbr::VirtualSubFiber{VirtualDenseLevel}, ext, mode, proto)
+    specialized = regularize_unfurl(ctx, fbr, ext, mode, proto)
+    specialized === nothing || return specialized
     unfurl(ctx, DenseTraversal(fbr, VirtualSubFiber), ext, mode, proto)
 end
 function unfurl(ctx, fbr::VirtualHollowSubFiber{VirtualDenseLevel}, ext, mode, proto)
