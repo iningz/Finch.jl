@@ -49,21 +49,19 @@ import Regularity: add, sub, mul, fld, mod, select
 
 # -- Host policy ---------------------------------------------------------------
 #
-# Capability checks decide whether Finch can realize a description exactly.
-# Policy checks decide whether that exact realization is likely worth emitting.
-# The constants below affect recognition and policy, never formula meaning.
+# Capability checks decide whether Finch can realize a description exactly;
+# scope conditions delimit what specialization is about. The one policy bound
+# below exists to prevent emitted-code explosion and nothing else — no
+# constant here predicts performance; the benchmark judges that.
 
-const SPECIALIZE_PMAX = Ref(8)           # Largest PeriodicAffine period to search.
-const SPECIALIZE_MIN_RUN = Ref(16)       # Shorter outer claims become opaque.
-const SPECIALIZE_LEAF_MIN_RUN = Ref(4)
-const SPECIALIZE_MAX_NODES = Ref(128)    # Maximum nodes in one level description.
-const SPECIALIZE_MAX_UNITS = Ref(512)    # Maximum units in the whole description.
-const SPECIALIZE_MIN_COVERAGE = Ref(0.5) # Minimum fraction covered by Segments.
+const SPECIALIZE_PMAX = Ref(8)  # Recognition bound: largest PeriodicAffine period searched.
 
-# Compilation-wide budget: emitted Sequence phases + emitted Switch cases per
-# specialized compilation attempt — the admission rule for multi-sparse
-# composition (value provisional until calibrated on the accepted sweep). A
-# breach declines the whole attempt to the generic path.
+# THE admission policy: emitted Sequence phases plus emitted Switch cases per
+# specialized compilation attempt (value provisional until calibrated on the
+# accepted sweep). Mining's node budget is this same bound projected onto the
+# evidence side — every mined node emits at least one phase — so no
+# independent description-size knob exists. A breach declines the whole
+# attempt to byte-identical generic code.
 const SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES = Ref(1024)
 
 "Set and return the PeriodicAffine period limit used by Finch specialization."
@@ -168,7 +166,7 @@ struct Candidate
     reusable::Bool
 end
 
-"Marks a tensor that was mined but not selected, preventing duplicate work."
+"Marks a tensor that was examined and not selected, preventing duplicate work."
 struct Declined end
 
 struct ExtractedChain
@@ -216,6 +214,24 @@ function extract_structure(root::AbstractVirtualLevel)::Union{ExtractedChain,Not
         rethrow()
     end
     ExtractedChain(virtuals, structure, something(reusable))
+end
+
+# -- Scope check ---------------------------------------------------------------
+
+# Specialization stages structural indirection, so a description is in scope
+# iff it claims at least one Segment at a compressed level. Dense coordinates
+# are identity by the level contract, so dense-only claims — like all-opaque
+# descriptions and chains with no compressed level at all, the degenerate
+# cases of the same rule — stage no data; realizing them would only
+# restructure loops and blur the byte-identity decline oracle.
+function _stages_indirection(nodes::Vector{R.Node}, levels, depth::Int)::Bool
+    for node in nodes
+        node isa R.Segment || continue
+        levels[depth] isa R.CompressedLevel && return true
+        node.body === nothing && continue
+        _stages_indirection(node.body, levels, depth + 1) && return true
+    end
+    false
 end
 
 # -- Capability checks ---------------------------------------------------------
@@ -277,19 +293,6 @@ end
 
 can_realize_description(description::R.Description)::Bool =
     _stages_cleanly(description.nodes, 0) && _coordinates_unit_step(description.nodes, 0)
-
-# -- Profitability policy ------------------------------------------------------
-
-function worth_realizing_description(
-    description::R.Description, structure::R.Structure
-)::Bool
-    any(level isa R.CompressedLevel for level in structure.levels) || return false
-    R.description_units(description) <= SPECIALIZE_MAX_UNITS[] || return false
-    tallies = R.coverage(description, structure)
-    total = sum(BigInt, tallies.total)
-    claimed = sum(BigInt, tallies.claimed)
-    total > 0 && claimed / total >= SPECIALIZE_MIN_COVERAGE[]
-end
 
 # -- Freshness snapshot --------------------------------------------------------
 
@@ -409,14 +412,22 @@ function Finch.mine_regular_structure!(ctx, fbr::VirtualFiber)
     root.regularity === nothing || return nothing            # Mine once per tensor.
     chain = extract_structure(root)
     chain === nothing && return nothing
+    # Mining claims whatever the recognizers confirm: no width threshold
+    # filters evidence-backed claims (min_run = 1) — phase-worthiness is a
+    # performance question the benchmark owns. The node budget is the emission
+    # bound projected onto mining: a level with more nodes than the budget can
+    # never be admitted, so it collapses to opaque during the one pass instead
+    # of paying emission first. The projection clamps into MiningPolicy's
+    # domain (max_nodes >= 1); a nonpositive budget still declines every
+    # realization at activation, so the clamp admits nothing.
     description = R.mine(chain.structure;
         families=(R.PeriodicAffineConfig(; pmax=SPECIALIZE_PMAX[]),),
-        min_run=SPECIALIZE_MIN_RUN[],
-        leaf_min_run=SPECIALIZE_LEAF_MIN_RUN[],
-        max_nodes=SPECIALIZE_MAX_NODES[])
+        min_run=1,
+        leaf_min_run=1,
+        max_nodes=max(1, SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[]))
     if !(
-        can_realize_description(description) &&
-        worth_realizing_description(description, chain.structure)
+        _stages_indirection(description.nodes, chain.structure.levels, 1) &&
+        can_realize_description(description)
     )
         root.regularity = Declined()
         return nothing

@@ -15,5 +15,6 @@ const RX = Base.get_extension(Finch, :RegularityExt)
 include("with_extension.jl")
 include("freshness_alias.jl")
 include("transaction.jl")
+include("admission.jl")
 
 end # module FinchRegularityTests
