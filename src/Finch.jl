@@ -101,6 +101,7 @@ include("abstract_tensor.jl")
 include("dimensions.jl")
 include("architecture.jl")
 include("scopes.jl")
+include("specialize_transaction.jl")
 include("lower.jl")
 
 include("transforms/exit_on_yieldbind.jl")

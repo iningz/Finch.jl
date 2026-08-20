@@ -28,7 +28,11 @@ function get_switch_cases(ctx, node::FinchNode)
     if node.kind === virtual
         get_switch_cases(ctx, node.val)
     elseif istree(node)
-        map(product(map(arg -> get_switch_cases(ctx, arg), arguments(node))...)) do case
+        case_lists = map(arg -> get_switch_cases(ctx, arg), arguments(node))
+        # Sibling case lists compose as a Cartesian product; check the
+        # specialization budget headroom before materializing it.
+        regularize_precompose(ctx, case_lists)
+        map(product(case_lists...)) do case
             guards = map(first, case)
             bodies = map(last, case)
             return simplify(ctx, call(and, guards...)) =>
@@ -43,6 +47,8 @@ get_switch_cases(ctx, node::Switch) = node.cases
 
 function lower(ctx::AbstractCompiler, stmt, ::SwitchStyle)
     cases = get_switch_cases(ctx, stmt)
+    # Each case is emitted as its own branch of the if/elseif chain below.
+    regularize_charge_switch_cases!(ctx, length(cases))
     function nest(cases, inner=false)
         guard, body = cases[1]
         body = contain(ctx) do ctx_2

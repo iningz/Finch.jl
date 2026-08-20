@@ -99,13 +99,14 @@ function execute_code(
     algebra=DefaultAlgebra(),
     mode=:safe,
     ctx=FinchCompiler(; algebra=algebra, mode=mode),
-    specialize=false,
     concrete=nothing,
 )
     code = contain(ctx) do ctx_2
         prgm = nothing
         prgm = virtualize(ctx_2.code, ex, T)
-        if specialize && concrete !== nothing
+        # Concrete structure is observable only inside a specialization
+        # attempt; a context without one compiles the ordinary generic path.
+        if concrete !== nothing && specialization_attempt(ctx_2) !== nothing
             attach_concrete!(prgm, concrete, false)
         end
         lower_global(ctx_2, prgm)
@@ -182,24 +183,26 @@ function execute(ex; algebra=DefaultAlgebra(), mode=:safe, specialize=false)
 end
 
 """
-    execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe)
+    execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe, report=nothing)
 
 Like [`execute`](@ref), but make concrete tensor structure available to a
 loaded specialization extension. A fresh kernel is generated on every call,
 outside the per-type `@staged` cache, so a structure-specific kernel cannot be
 reused for another tensor merely because its type matches. This per-call path
-does not need a runtime freshness guard.
+does not need a runtime freshness guard. The compilation runs as one
+[`specialize_compile`](@ref) transaction; `report` receives its
+[`SpecializeReport`](@ref).
 """
-function execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe)
-    ctx = FinchCompiler(; algebra=algebra, mode=mode)
-    sym = freshen(ctx, :ex)
-    code = execute_code(
-        sym, typeof(ex); algebra=algebra, mode=mode, ctx=ctx,
-        specialize=true, concrete=ex,
-    )
-    code = quote
-        $sym = $ex
-        @inbounds @fastmath $code
+function execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe, report=nothing)
+    code = specialize_compile(; algebra=algebra, mode=mode, report=report) do ctx
+        sym = freshen(ctx, :ex)
+        body = execute_code(
+            sym, typeof(ex); algebra=algebra, mode=mode, ctx=ctx, concrete=ex,
+        )
+        quote
+            $sym = $ex
+            @inbounds @fastmath $body
+        end
     end
     thunk = eval(:(() -> $code))
     Base.invokelatest(thunk)
@@ -324,19 +327,31 @@ macro finch_code(opts_ex...)
     end
     return quote
         let prgm = $prgm
-            unquote_literals(
-                dataflow(
-                    unresolve(
-                        pretty(
-                            $execute_code(
-                                :ex, typeof(prgm); concrete=prgm, $(map(esc, opts)...)
-                            ),
-                        ),
-                    ),
-                ),
-            )
+            $finch_code(prgm; $(map(esc, opts)...))
         end
     end
+end
+
+"""
+    finch_code(prgm; algebra, mode, specialize=false, report=nothing)
+
+Return the code that would execute the finch program instance `prgm`. With
+`specialize=true` the compilation runs as one [`specialize_compile`](@ref)
+transaction and `report` receives its [`SpecializeReport`](@ref).
+"""
+function finch_code(
+    prgm; algebra=DefaultAlgebra(), mode=:safe, specialize=false, report=nothing
+)
+    code = if specialize
+        specialize_compile(; algebra=algebra, mode=mode, report=report) do ctx
+            execute_code(
+                :ex, typeof(prgm); algebra=algebra, mode=mode, ctx=ctx, concrete=prgm,
+            )
+        end
+    else
+        execute_code(:ex, typeof(prgm); algebra=algebra, mode=mode)
+    end
+    unquote_literals(dataflow(unresolve(pretty(code))))
 end
 
 """
@@ -355,14 +370,33 @@ function finch_kernel(
     algebra=DefaultAlgebra(),
     mode=:safe,
     specialize=false,
-    ctx=FinchCompiler(; algebra=algebra, mode=mode),
+    report=nothing,
+    ctx=nothing,
 )
+    if specialize
+        # A specialized compilation is one transaction over a fresh context
+        # per attempt; a caller-supplied context cannot be rebuilt for a
+        # byte-identical generic retry.
+        ctx === nothing || throw(ArgumentError(
+            "finch_kernel: specialize=true builds a fresh compiler context per " *
+            "attempt and cannot reuse a caller-supplied ctx"))
+        return specialize_compile(; algebra=algebra, mode=mode, report=report) do ctx_2
+            finch_kernel_code(fname, args, prgm, ctx_2; algebra=algebra, mode=mode)
+        end
+    end
+    finch_kernel_code(fname, args, prgm,
+        something(ctx, FinchCompiler(; algebra=algebra, mode=mode));
+        algebra=algebra, mode=mode)
+end
+
+function finch_kernel_code(fname, args, prgm, ctx; algebra, mode)
     maybe_typeof(x) = x isa Type ? x : typeof(x)
     ex = freshen(ctx, :ex)
     code = contain(ctx) do ctx_2
         foreach(args) do (key, val)
             virt = virtualize(ctx_2.code, key, maybe_typeof(val), key)
-            if specialize && val isa Tensor && virt isa VirtualFiber
+            if specialization_attempt(ctx_2) !== nothing && val isa Tensor &&
+                virt isa VirtualFiber
                 # The generated function can be called again, so mark its
                 # concrete structure as reusable and require a freshness guard.
                 stash_concrete!(virt.lvl, val.lvl, true)

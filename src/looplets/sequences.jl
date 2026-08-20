@@ -26,6 +26,8 @@ combine_style(a::SequenceStyle, b::PhaseStyle) = b
 function lower(ctx::AbstractCompiler, root::FinchNode, ::SequenceStyle)
     if root.kind === loop
         phases = get_sequence_phases(ctx, root.body, root.ext)
+        # Each composed phase is emitted as its own loop below.
+        regularize_charge_sequence_phases!(ctx, length(phases))
 
         i = getname(root.idx)
         i0 = freshen(ctx, i, :_start)
@@ -55,9 +57,13 @@ function get_sequence_phases(ctx, node::FinchNode, ext)
     if node.kind === virtual
         get_sequence_phases(ctx, node.val, ext)
     elseif istree(node)
+        phase_lists = map(arg -> get_sequence_phases(ctx, arg, ext), arguments(node))
+        # Sibling phase lists compose as a Cartesian product; check the
+        # specialization budget headroom before materializing it.
+        regularize_precompose(ctx, phase_lists)
         map(
             flatten((
-                product(map(arg -> get_sequence_phases(ctx, arg, ext), arguments(node))...),
+                product(phase_lists...),
             )),
         ) do phases
             keys = map(first, phases)

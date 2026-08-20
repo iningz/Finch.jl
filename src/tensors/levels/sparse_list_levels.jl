@@ -291,6 +291,7 @@ function declare_level!(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, pos,
         ctx,
         quote
             Finch.touch_structure!($(lvl.ptr))
+            Finch.touch_structure!($(lvl.idx))
             $(lvl.qos_fill) = $(Tp(0))
             $(lvl.qos_stop) = $(Tp(0))
         end,
@@ -324,6 +325,7 @@ function freeze_level!(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, pos_s
         ctx,
         quote
             Finch.touch_structure!($(lvl.ptr))
+            Finch.touch_structure!($(lvl.idx))
             resize!($(lvl.ptr), $pos_stop + 1)
             for $p in 1:($pos_stop)
                 $(lvl.ptr)[$p + 1] += $(lvl.ptr)[$p]
@@ -344,6 +346,7 @@ function thaw_level!(ctx::AbstractCompiler, lvl::VirtualSparseListLevel, pos_sto
         ctx,
         quote
             Finch.touch_structure!($(lvl.ptr))
+            Finch.touch_structure!($(lvl.idx))
             $(lvl.qos_fill) = $(lvl.ptr)[$pos_stop + 1] - 1
             $(lvl.qos_stop) = $(lvl.qos_fill)
             $qos_stop = $(lvl.qos_fill)

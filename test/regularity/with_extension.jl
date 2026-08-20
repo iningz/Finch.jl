@@ -43,6 +43,18 @@ function parent_dependent_data(nouter, nmiddle)
     return data
 end
 
+function cancellation_fibers(n)
+    # The storage-ordered sum is 2.0. Moving either large term across a small
+    # one changes the rounded result, so bitwise equality fingerprints the
+    # visit order without exposing any emitter state.
+    values = (2.0^54, 1.0, -(2.0^54), -1.0, 3.0)
+    data = zeros(Float64, n + length(values) - 1, n)
+    for j in 1:n, (offset, value) in enumerate(values)
+        data[j + offset - 1, j] = value
+    end
+    return data
+end
+
 function ordered_bits(x::Float64)
     bits = reinterpret(UInt64, x)
     sign = UInt64(1) << 63
@@ -61,7 +73,8 @@ function ulps_apart(xs, ys)
 end
 
 source_lines(code) = count(==('\n'), code) + 1
-structural_reads(code) = length(collect(eachmatch(r"(?:ptr|idx)\w*\s*\[", code)))
+ptr_reads(code) = length(collect(eachmatch(r"ptr\w*\s*\[", code)))
+idx_reads(code) = length(collect(eachmatch(r"idx\w*\s*\[", code)))
 
 function spmv_results(format, data)
     A = Tensor(format, data)
@@ -99,6 +112,26 @@ function sum3_results(format, data)
         specialized .= 0.0
         for k in _, j in _, i in _
             specialized[k] += A[i, j, k]
+        end
+    end
+    return Array(generic), Array(specialized)
+end
+
+function fiber_sum_results(format, data)
+    A = Tensor(format, data)
+    generic = Tensor(Dense(Element(0.0)), zeros(size(data, 2)))
+    specialized = Tensor(Dense(Element(0.0)), zeros(size(data, 2)))
+
+    @finch begin
+        generic .= 0.0
+        for j in _, i in _
+            generic[j] += A[i, j]
+        end
+    end
+    @finch specialize = true begin
+        specialized .= 0.0
+        for j in _, i in _
+            specialized[j] += A[i, j]
         end
     end
     return Array(generic), Array(specialized)
@@ -145,11 +178,16 @@ end
 
     @testset "dense and sparse roots realize exactly" begin
         data = unclipped_banded_data(96, 2)
+        visit_data = cancellation_fibers(18)
         formats = (
             Dense(SparseList(Element(0.0))),
             SparseList(SparseList(Element(0.0))),
         )
         for format in formats
+            generic_visits, specialized_visits = fiber_sum_results(format, visit_data)
+            @test reinterpret(UInt64, generic_visits) ==
+                reinterpret(UInt64, specialized_visits)
+
             generic, specialized = spmv_results(format, data)
             @test ulps_apart(generic, specialized) <= 4
 
@@ -159,7 +197,8 @@ end
             generic_code = spmv_code(A, x, y; specialize=false)
             specialized_code = spmv_code(A, x, y; specialize=true)
             @test specialized_code != generic_code
-            @test structural_reads(specialized_code) == 0
+            @test idx_reads(specialized_code) == 0
+            @test ptr_reads(specialized_code) == 0
         end
     end
 
@@ -169,6 +208,7 @@ end
             Dense(SparseList(SparseList(Element(0.0)))),
             Dense(Dense(SparseList(Element(0.0)))),
             SparseList(Dense(SparseList(Element(0.0)))),
+            SparseList(SparseList(SparseList(Element(0.0)))),
         )
         for format in formats
             generic, specialized = sum3_results(format, data)
@@ -179,11 +219,12 @@ end
             generic_code = sum3_code(A, y; specialize=false)
             specialized_code = sum3_code(A, y; specialize=true)
             @test specialized_code != generic_code
-            @test structural_reads(specialized_code) == 0
+            @test idx_reads(specialized_code) == 0
+            @test ptr_reads(specialized_code) == 0
         end
     end
 
-    @testset "claimed code is read-free and bounded by the description" begin
+    @testset "claimed code is structural-read-free and bounded by the description" begin
         function code_for(n)
             data = unclipped_banded_data(n, 2)
             A = Tensor(Dense(SparseList(Element(0.0))), data)
@@ -198,8 +239,10 @@ end
         generic, small = code_for(64)
         _, large = code_for(4096)
         @test small != generic
-        @test structural_reads(generic) > 0
-        @test structural_reads(small) == 0
+        @test ptr_reads(generic) > 0
+        @test idx_reads(generic) > 0
+        @test idx_reads(small) == 0
+        @test ptr_reads(small) == 0
         @test source_lines(small) == source_lines(large)
     end
 
@@ -215,7 +258,8 @@ end
         generic_code = spmv_code(A, x, y; specialize=false)
         specialized_code = spmv_code(A, x, y; specialize=true)
         @test specialized_code != generic_code
-        @test structural_reads(specialized_code) == 0
+        @test idx_reads(specialized_code) == 0
+        @test ptr_reads(specialized_code) == 0
 
         for selector in -1:3
             staged_select = RX.select(RX.STAGE, (11, 22, 33), :selector)
@@ -274,11 +318,12 @@ end
             generic_code = sum3_code(A, y; specialize=false)
             specialized_code = sum3_code(A, y; specialize=true)
             @test specialized_code != generic_code
-            @test structural_reads(specialized_code) > 0
+            @test idx_reads(specialized_code) > 0
+            @test ptr_reads(specialized_code) > 0
         end
     end
 
-    @testset "declines are compiler-context pure" begin
+    @testset "declined retries are compiler-context pure" begin
         data_a = banded_data(64, 2)
         data_b = banded_data(64, 3)
         A = Tensor(Dense(SparseList(Element(0.0))), data_a)
@@ -291,13 +336,37 @@ end
                 C[i, j] = A[i, j] * B[i, j]
             end
         end)
-        two_specialized = string(@finch_code specialize = true begin
-            C .= 0.0
-            for j in _, i in _
-                C[i, j] = A[i, j] * B[i, j]
-            end
-        end)
-        @test two_specialized == two_generic
+        old_limit = RX.SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[]
+        admitted_report = Ref{F.SpecializeReport}()
+        declined_report = Ref{F.SpecializeReport}()
+        try
+            RX.SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[] = typemax(Int)
+            admitted = string(@finch_code specialize = true report = admitted_report begin
+                C .= 0.0
+                for j in _, i in _
+                    C[i, j] = A[i, j] * B[i, j]
+                end
+            end)
+            @test admitted != two_generic
+            @test admitted_report[].realized >= 2
+            @test !admitted_report[].declined
+
+            emitted_total = admitted_report[].emitted_sequence_phases +
+                            admitted_report[].emitted_switch_cases
+            @test emitted_total > 0
+            RX.SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[] = emitted_total - 1
+            declined = string(@finch_code specialize = true report = declined_report begin
+                C .= 0.0
+                for j in _, i in _
+                    C[i, j] = A[i, j] * B[i, j]
+                end
+            end)
+            @test declined == two_generic
+            @test declined_report[].declined
+            @test declined_report[].reason === :emitted_phases_and_cases
+        finally
+            RX.SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[] = old_limit
+        end
 
         write_generic = string(@finch_code begin
             for j in _, i in _

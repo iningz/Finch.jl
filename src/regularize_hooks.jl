@@ -72,18 +72,22 @@ concrete_stash(vlvl::VirtualSparseListLevel) = vlvl.concrete
 
 # -- Structural freshness -----------------------------------------------------
 # A reusable kernel may run after Finch has rewritten a sparse structure in
-# place. Array identity and length do not detect such a rewrite, so each pointer
-# array object has a generation token. Finch increments it at lifecycle
-# transitions that may change `ptr` or `idx`. A kernel records token identity
-# and generation when it is built and compares them before every later run.
+# place. Array identity and length do not detect such a rewrite, so each
+# structural array object — `ptr` and `idx` alike — has its own generation
+# token. Finch increments the tokens of every array a lifecycle transition may
+# change. A kernel records token identity and generation for each array it
+# depends on when it is built and compares them before every later run.
+# Per-array tokens matter: two levels may hold distinct `ptr` arrays yet share
+# one mutable `idx`, and a rewrite reached through the other level must still
+# be observed here.
 #
-# Aliases that hold the same pointer-array object share its token. Direct user
+# Aliases that hold the same array object share its token. Direct user
 # mutation of raw arrays bypasses Finch's lifecycle and is not tracked.
 
 """
     StructuralToken
 
-The generation token associated with one pointer-array object. `generation`
+The generation token associated with one structural array object. `generation`
 counts Finch lifecycle transitions that may rewrite structure. `valid` becomes
 false if the counter is exhausted, so wraparound can never make stale structure
 look current.
@@ -109,8 +113,8 @@ end
 
 # `WeakKeyDict` uses value equality and the key's mutable hash. Structural
 # arrays need identity semantics, so keep weak references and compare with
-# `===`. The registry is normally tiny: one entry per structure observed by a
-# reusable specialized kernel.
+# `===`. The registry is normally tiny: one entry per structural array
+# observed by a reusable specialized kernel.
 const _structural_tokens = Tuple{WeakRef,StructuralToken}[]
 const _structural_tokens_lock = ReentrantLock()
 

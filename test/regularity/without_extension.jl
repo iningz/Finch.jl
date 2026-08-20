@@ -14,7 +14,8 @@
             y[i] += A[i, j] * x[j]
         end
     end)
-    inert = string(@finch_code specialize = true begin
+    report = Ref{Finch.SpecializeReport}()
+    inert = string(@finch_code specialize = true report = report begin
         y .= 0.0
         for j in _, i in _
             y[i] += A[i, j] * x[j]
@@ -22,4 +23,8 @@
     end)
 
     @test inert == generic
+    @test isassigned(report)
+    @test report[].realized == 0
+    @test !report[].declined
+    @test report[].reason === nothing
 end
