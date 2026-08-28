@@ -23,7 +23,7 @@ using Preferences
 using UnsafeAtomics
 
 export @finch, @finch_program, @finch_code, @finch_kernel, value
-export execute_specialized
+export execute_specialized, SpecializePolicy
 
 export Tensor
 export DenseFormat,

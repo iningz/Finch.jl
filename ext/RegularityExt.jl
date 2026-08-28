@@ -32,7 +32,7 @@ using Finch:
     VirtualDenseLevel, VirtualSparseListLevel, VirtualElementLevel,
     DenseLevel, SparseListLevel, ElementLevel,
     ConcreteStash, concrete_stash, structural_token,
-    specialization_attempt, activate_specialization_budget!,
+    specialization_attempt,
     Phase, Sequence, Run, Lookup, Thunk, FillLeaf, Simplify,
     instantiate, unfurl, unfurl_sparse_list_walk,
     literal, isliteral, value, freshen, virtual,
@@ -46,31 +46,6 @@ import Finch: mine_regular_structure!, regularize_unfurl
 using Regularity
 const R = Regularity
 import Regularity: add, sub, mul, fld, mod, select
-
-# -- Host policy ---------------------------------------------------------------
-#
-# Capability checks decide whether Finch can realize a description exactly;
-# scope conditions delimit what specialization is about. The one policy bound
-# below exists to prevent emitted-code explosion and nothing else — no
-# constant here predicts performance; the benchmark judges that.
-
-const SPECIALIZE_PMAX = Ref(8)  # Recognition bound: largest PeriodicAffine period searched.
-
-# THE admission policy: emitted Sequence phases plus emitted Switch cases per
-# specialized compilation attempt (value provisional until calibrated on the
-# accepted sweep). Mining's node budget is this same bound projected onto the
-# evidence side — every mined node emits at least one phase — so no
-# independent description-size knob exists. A breach declines the whole
-# attempt to byte-identical generic code.
-const SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES = Ref(1024)
-
-"Set and return the PeriodicAffine period limit used by Finch specialization."
-function bind_specialize_pmax!(pmax::Integer)::Int
-    value = Int(pmax)
-    R.PeriodicAffineConfig(value)         # Validate the same bound used by mining.
-    SPECIALIZE_PMAX[] = value
-    value
-end
 
 # -- Staged arithmetic ---------------------------------------------------------
 #
@@ -223,7 +198,7 @@ end
 # are identity by the level contract, so dense-only claims — like all-opaque
 # descriptions and chains with no compressed level at all, the degenerate
 # cases of the same rule — stage no data; realizing them would only
-# restructure loops and blur the byte-identity decline oracle.
+# restructure loops and blur the byte-identity oracle for unrealized code.
 function _stages_indirection(nodes::Vector{R.Node}, levels, depth::Int)::Bool
     for node in nodes
         node isa R.Segment || continue
@@ -259,40 +234,11 @@ function _stages_cleanly(nodes::Vector{R.Node}, depth::Int)::Bool
 end
 
 # Finch phases cover contiguous coordinate ranges, so a realized segment must
-# advance coordinates by exactly one. The innermost scalar must be a period-one
-# formula whose drift folds to literal `1` for symbolic enclosing ordinals.
-function _staged_innermost_drift(pattern::R.Pattern, probes::Tuple)::Any
-    if pattern isa R.Nest
-        contents = Staged[R.evaluate(param, probes[1], STAGE) for param in pattern.params]
-        _staged_innermost_drift(
-            R.refill(pattern.child, contents, STAGE), Base.tail(probes))
-    else
-        pattern.drift
-    end
-end
-
-function _unit_step(coordinate::R.Pattern, depth::Int)::Bool
-    innermost = coordinate
-    while innermost isa R.Nest
-        innermost = innermost.child
-    end
-    innermost isa R.PeriodicAffine{1} || return false
-    probes = ntuple(i -> Symbol(:__probe_, i), depth - 1)
-    _staged_innermost_drift(coordinate, probes) === 1
-end
-
-function _coordinates_unit_step(nodes::Vector{R.Node}, depth::Int)::Bool
-    for node in nodes
-        node isa R.Segment || continue
-        _unit_step(node.coord, depth + 1) || return false
-        node.body === nothing || _coordinates_unit_step(node.body, depth + 1) ||
-            return false
-    end
-    true
-end
-
+# advance leaf coordinates by exactly one. That contract is enforced at mining
+# time: `mine_regular_structure!` configures the recognizer with `leaf_drift=1`,
+# so a description arriving here never claims a non-unit leaf stretch.
 can_realize_description(description::R.Description)::Bool =
-    _stages_cleanly(description.nodes, 0) && _coordinates_unit_step(description.nodes, 0)
+    _stages_cleanly(description.nodes, 0)
 
 # -- Freshness snapshot --------------------------------------------------------
 
@@ -412,19 +358,17 @@ function Finch.mine_regular_structure!(ctx, fbr::VirtualFiber)
     root.regularity === nothing || return nothing            # Mine once per tensor.
     chain = extract_structure(root)
     chain === nothing && return nothing
-    # Mining claims whatever the recognizers confirm: no width threshold
-    # filters evidence-backed claims (min_run = 1) — phase-worthiness is a
-    # performance question the benchmark owns. The node budget is the emission
-    # bound projected onto mining: a level with more nodes than the budget can
-    # never be admitted, so it collapses to opaque during the one pass instead
-    # of paying emission first. The projection clamps into MiningPolicy's
-    # domain (max_nodes >= 1); a nonpositive budget still declines every
-    # realization at activation, so the clamp admits nothing.
+    # Mining claims whatever the recognizers confirm under the attempt's
+    # policy — pattern search depth (pmax) and claim granularity (min_run,
+    # leaf_min_run) are the compiler's only knobs; phase-worthiness is a
+    # performance question the benchmark owns. Concrete storage is stashed
+    # only under a specialization attempt, so the attempt exists here.
+    policy = specialization_attempt(ctx).policy
     description = R.mine(chain.structure;
-        families=(R.PeriodicAffineConfig(; pmax=SPECIALIZE_PMAX[]),),
-        min_run=1,
-        leaf_min_run=1,
-        max_nodes=max(1, SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[]))
+        families=(R.PeriodicAffineConfig(; pmax=policy.pmax, leaf_drift=1),),
+        min_run=policy.min_run,
+        leaf_min_run=policy.leaf_min_run,
+        max_nodes=typemax(Int))
     if !(
         _stages_indirection(description.nodes, chain.structure.levels, 1) &&
         can_realize_description(description)
@@ -457,18 +401,12 @@ function Finch.regularize_unfurl(ctx, fbr::VirtualSubFiber, ext, mode, proto)
     # A windowed loop lacks this anchor.
     _outermost_traversal(ctx) || return nothing      # Preserve storage visit order.
     _alias_free(ctx, root) || return nothing         # Exclude mid-call structural mutation.
-    # Use-site policy: independent multi-sparse operands are admitted; the
-    # compilation-wide budget on actually emitted Sequence phases plus Switch
-    # cases is the admission rule for whatever composition produces, and a
-    # breach declines the whole attempt to byte-identical generic code. The
+    # Use-site policy: independent multi-sparse operands are admitted. The
     # emitter is sound under composed (re-)emission: every realized sparse
     # fiber self-anchors, so emitted bodies carry no cross-phase state.
-    # All checks passed; the realization is committed. Activate the budget so
-    # emitted Sequence phases and Switch cases are bounded from here on
-    # (activation reconciles charges already accrued and may decline).
+    # All checks passed; the realization is committed and counted.
     attempt = specialization_attempt(ctx)
-    attempt === nothing || activate_specialization_budget!(
-        attempt, SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[])
+    attempt === nothing || (attempt.realized += 1)
     # Emission may now allocate compiler state.
     emission = Emission(ctx, root, mode)
     body = _realize_fiber(ctx, emission, 1, candidate.description.nodes, (),

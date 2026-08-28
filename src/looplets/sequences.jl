@@ -58,9 +58,6 @@ function get_sequence_phases(ctx, node::FinchNode, ext)
         get_sequence_phases(ctx, node.val, ext)
     elseif istree(node)
         phase_lists = map(arg -> get_sequence_phases(ctx, arg, ext), arguments(node))
-        # Sibling phase lists compose as a Cartesian product; check the
-        # specialization budget headroom before materializing it.
-        regularize_precompose(ctx, phase_lists)
         map(
             flatten((
                 product(phase_lists...),

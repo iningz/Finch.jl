@@ -29,9 +29,6 @@ function get_switch_cases(ctx, node::FinchNode)
         get_switch_cases(ctx, node.val)
     elseif istree(node)
         case_lists = map(arg -> get_switch_cases(ctx, arg), arguments(node))
-        # Sibling case lists compose as a Cartesian product; check the
-        # specialization budget headroom before materializing it.
-        regularize_precompose(ctx, case_lists)
         map(product(case_lists...)) do case
             guards = map(first, case)
             bodies = map(last, case)

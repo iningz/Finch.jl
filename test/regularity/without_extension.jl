@@ -25,6 +25,5 @@
     @test inert == generic
     @test isassigned(report)
     @test report[].realized == 0
-    @test !report[].declined
-    @test report[].reason === nothing
+    @test report[].emitted_sequence_phases > 0
 end

@@ -323,7 +323,7 @@ end
         end
     end
 
-    @testset "declined retries are compiler-context pure" begin
+    @testset "use-site refusals leave byte-identical generic code" begin
         data_a = banded_data(64, 2)
         data_b = banded_data(64, 3)
         A = Tensor(Dense(SparseList(Element(0.0))), data_a)
@@ -336,37 +336,17 @@ end
                 C[i, j] = A[i, j] * B[i, j]
             end
         end)
-        old_limit = RX.SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[]
         admitted_report = Ref{F.SpecializeReport}()
-        declined_report = Ref{F.SpecializeReport}()
-        try
-            RX.SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[] = typemax(Int)
-            admitted = string(@finch_code specialize = true report = admitted_report begin
-                C .= 0.0
-                for j in _, i in _
-                    C[i, j] = A[i, j] * B[i, j]
-                end
-            end)
-            @test admitted != two_generic
-            @test admitted_report[].realized >= 2
-            @test !admitted_report[].declined
-
-            emitted_total = admitted_report[].emitted_sequence_phases +
-                            admitted_report[].emitted_switch_cases
-            @test emitted_total > 0
-            RX.SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[] = emitted_total - 1
-            declined = string(@finch_code specialize = true report = declined_report begin
-                C .= 0.0
-                for j in _, i in _
-                    C[i, j] = A[i, j] * B[i, j]
-                end
-            end)
-            @test declined == two_generic
-            @test declined_report[].declined
-            @test declined_report[].reason === :emitted_phases_and_cases
-        finally
-            RX.SPECIALIZE_MAX_EMITTED_PHASES_AND_CASES[] = old_limit
-        end
+        admitted = string(@finch_code specialize = true report = admitted_report begin
+            C .= 0.0
+            for j in _, i in _
+                C[i, j] = A[i, j] * B[i, j]
+            end
+        end)
+        @test admitted != two_generic
+        @test admitted_report[].realized >= 2
+        @test admitted_report[].emitted_sequence_phases +
+              admitted_report[].emitted_switch_cases > 0
 
         write_generic = string(@finch_code begin
             for j in _, i in _
