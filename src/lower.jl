@@ -38,9 +38,11 @@ set_thawed!(ctx::FinchCompiler, var, val, op) = set_thawed!(ctx.scope, var, val,
 get_tensor_mode(ctx::FinchCompiler, var) = get_tensor_mode(ctx.scope, var)
 function open_scope(f::F, ctx::FinchCompiler) where {F}
     open_scope(ctx.scope) do scope_2
-        f(FinchCompiler(
-            ctx.code, ctx.algebra, ctx.mode, ctx.result, ctx.symbolic, scope_2,
-            ctx.attempt))
+        f(
+            FinchCompiler(
+                ctx.code, ctx.algebra, ctx.mode, ctx.result, ctx.symbolic, scope_2,
+                ctx.attempt),
+        )
     end
 end
 
@@ -56,9 +58,11 @@ simplify(ctx::FinchCompiler, root) = simplify(ctx.symbolic, root)
 
 function contain(f, ctx::FinchCompiler; kwargs...)
     contain(ctx.code; kwargs...) do code_2
-        f(FinchCompiler(
-            code_2, ctx.algebra, ctx.mode, ctx.result, ctx.symbolic, ctx.scope,
-            ctx.attempt))
+        f(
+            FinchCompiler(
+                code_2, ctx.algebra, ctx.mode, ctx.result, ctx.symbolic, ctx.scope,
+                ctx.attempt),
+        )
     end
 end
 

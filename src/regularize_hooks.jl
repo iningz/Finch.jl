@@ -88,27 +88,10 @@ concrete_stash(vlvl::VirtualSparseListLevel) = vlvl.concrete
     StructuralToken
 
 The generation token associated with one structural array object. `generation`
-counts Finch lifecycle transitions that may rewrite structure. `valid` becomes
-false if the counter is exhausted, so wraparound can never make stale structure
-look current.
+counts Finch lifecycle transitions that may rewrite structure.
 """
 mutable struct StructuralToken
     generation::UInt64
-    valid::Bool
-end
-
-StructuralToken(generation::UInt64) = StructuralToken(generation, true)
-function StructuralToken(generation::Integer)
-    generation >= 0 || throw(ArgumentError(
-        "StructuralToken generation must be nonnegative"))
-    converted = try
-        UInt64(generation)
-    catch failure
-        failure isa InexactError || rethrow()
-        throw(ArgumentError(
-                "StructuralToken generation does not fit UInt64: $generation"))
-    end
-    StructuralToken(converted)
 end
 
 # `WeakKeyDict` uses value equality and the key's mutable hash. Structural
@@ -149,16 +132,10 @@ end
     touch_structure!(token::StructuralToken)
     touch_structure!(key::AbstractVector)
 
-Record that the guarded structure may have changed. The generation increments
-without wrapping. At the maximum value, the token is permanently invalidated
-and `OverflowError` is raised. Finch calls this from emitted `declare!`,
-`freeze!`, and `thaw!` lifecycle code.
+Record that the guarded structure may have changed. Finch calls this from
+emitted `declare!`, `freeze!`, and `thaw!` lifecycle code.
 """
 function touch_structure!(token::StructuralToken)
-    if token.generation == typemax(UInt64)
-        token.valid = false
-        throw(OverflowError("structural generation is exhausted"))
-    end
     token.generation += UInt64(1)
     nothing
 end
@@ -168,10 +145,10 @@ touch_structure!(key::AbstractVector) = touch_structure!(structural_token(key))
 """
     structure_current(key::AbstractVector, token_id::UInt, generation::UInt64) -> Bool
 
-Return whether `key` still has the valid token identity and generation recorded
+Return whether `key` still has the token identity and generation recorded
 when a reusable kernel was built.
 """
 function structure_current(key::AbstractVector, token_id::UInt, generation::UInt64)::Bool
     token = structural_token(key)
-    token.valid && objectid(token) === token_id && token.generation === generation
+    objectid(token) === token_id && token.generation === generation
 end

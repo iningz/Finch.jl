@@ -14,6 +14,7 @@ const RX = Base.get_extension(Finch, :RegularityExt)
 
 include("with_extension.jl")
 include("freshness_alias.jl")
+include("decline_gates.jl")
 include("transaction.jl")
 include("policy.jl")
 

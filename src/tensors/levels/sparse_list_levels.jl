@@ -383,13 +383,17 @@ end
 
 # The native sequential walk has its own name so an Opaque phase can re-enter
 # it directly. Both paths therefore use the same sparse traversal code, with no
-# re-consultation of the hook (which would re-realize and recurse).
+# re-consultation of the hook (which would re-realize and recurse). `bounds`,
+# when given, is the staged `(q_start, q_stop)` position range of the stretch
+# to walk (stop exclusive); the walk then reads no `ptr` at all. Without it
+# the fiber's own `ptr` entries bound the walk.
 function unfurl_sparse_list_walk(
     ctx,
     fbr::VirtualSubFiber{VirtualSparseListLevel},
     ext,
     mode,
-    proto::Union{typeof(defaultread),typeof(walk)},
+    proto::Union{typeof(defaultread),typeof(walk)};
+    bounds::Union{Nothing,Tuple{Any,Any}}=nothing,
 )
     (lvl, pos) = (fbr.lvl, fbr.pos)
     tag = lvl.tag
@@ -399,11 +403,14 @@ function unfurl_sparse_list_walk(
     my_q = freshen(ctx, tag, :_q)
     my_q_stop = freshen(ctx, tag, :_q_stop)
     my_i1 = freshen(ctx, tag, :_i1)
+    (q_start, q_stop) = bounds === nothing ?
+        (:($(lvl.ptr)[$(ctx(pos))]), :($(lvl.ptr)[$(ctx(pos)) + $(Tp(1))])) :
+        bounds
 
     Thunk(;
         preamble=quote
-            $my_q = $(lvl.ptr)[$(ctx(pos))]
-            $my_q_stop = $(lvl.ptr)[$(ctx(pos)) + $(Tp(1))]
+            $my_q = $q_start
+            $my_q_stop = $q_stop
             if $my_q < $my_q_stop
                 $my_i = $(lvl.idx)[$my_q]
                 $my_i1 = $(lvl.idx)[$my_q_stop - $(Tp(1))]

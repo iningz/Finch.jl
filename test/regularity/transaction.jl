@@ -8,9 +8,11 @@ function transaction_spmv_problem(n=64)
     A, x, y, data * Array(x)
 end
 
-function transaction_spmv_code(A, x, y; specialize, report=nothing)
+function transaction_spmv_code(
+    A, x, y; specialize, policy=SpecializePolicy(), report=nothing
+)
     if specialize
-        return string(@finch_code specialize = true report = report begin
+        return string(@finch_code specialize = true policy = policy report = report begin
             y .= 0.0
             for j in _, i in _
                 y[i] += A[i, j] * x[j]
@@ -25,9 +27,11 @@ function transaction_spmv_code(A, x, y; specialize, report=nothing)
     end)
 end
 
-function transaction_spmv_kernel_code(A, x, y; report)
+function transaction_spmv_kernel_code(
+    A, x, y; policy=SpecializePolicy(), report
+)
     string(
-        @finch_kernel specialize = true report = report function transaction_spmv(
+        @finch_kernel specialize = true policy = policy report = report function transaction_spmv(
             y, A, x
         )
             y .= 0.0
@@ -61,7 +65,8 @@ end
 @testset "specialization transaction" begin
     @testset "charges accrue on the attempt and are inert elsewhere" begin
         @test fieldnames(F.SpecializeReport) ==
-            (:realized, :emitted_sequence_phases, :emitted_switch_cases)
+            (:realized, :emitted_sequence_phases, :emitted_switch_cases,
+             :abstract_spans, :concrete_spans, :structural_reads)
 
         attempt = F.SpecializationAttempt()
         @test attempt.policy == F.SpecializePolicy()
@@ -71,7 +76,7 @@ end
         F.regularize_charge_switch_cases!(ctx, 1)
         @test attempt.sequence_phases == 2
         @test attempt.switch_cases == 4
-        @test F.SpecializeReport(attempt) == F.SpecializeReport(0, 2, 4)
+        @test F.SpecializeReport(attempt) == F.SpecializeReport(0, 2, 4, 0, 0, 0)
 
         generic_ctx = F.FinchCompiler()
         @test F.regularize_charge_sequence_phases!(generic_ctx, 10) === nothing
@@ -112,7 +117,7 @@ end
         @test ulps_apart(Array(result.y), expected) <= 4
         @test execute_report[].realized >= 1
 
-        unwritten = F.SpecializeReport(-1, -1, -1)
+        unwritten = F.SpecializeReport(-1, -1, -1, 0, 0, 0)
         unused_report = Ref(unwritten)
         @finch_code report = unused_report begin
             y .= 0.0
@@ -166,7 +171,7 @@ end
 
     @testset "a foreign error propagates without a report" begin
         calls = 0
-        unwritten = F.SpecializeReport(-1, -1, -1)
+        unwritten = F.SpecializeReport(-1, -1, -1, 0, 0, 0)
         foreign_report = Ref(unwritten)
         exception = try
             F.specialize_compile(; report=foreign_report) do ctx
@@ -205,7 +210,7 @@ end
             :outer
         end
         @test result === :outer
-        @test outer_report[] == F.SpecializeReport(0, 4, 0)
-        @test inner_report[] == F.SpecializeReport(0, 0, 2)
+        @test outer_report[] == F.SpecializeReport(0, 4, 0, 0, 0, 0)
+        @test inner_report[] == F.SpecializeReport(0, 0, 2, 0, 0, 0)
     end
 end

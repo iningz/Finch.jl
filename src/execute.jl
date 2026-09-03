@@ -175,9 +175,10 @@ end
 end
 
 function execute(ex; algebra=DefaultAlgebra(), mode=:safe, specialize=false,
-        policy::SpecializePolicy=SpecializePolicy())
+    policy::SpecializePolicy=SpecializePolicy(), report=nothing)
     if specialize
-        execute_specialized(ex; algebra=algebra, mode=mode, policy=policy)
+        execute_specialized(ex; algebra=algebra, mode=mode, policy=policy,
+            report=report)
     else
         execute_impl(ex, Val(algebra), Val(mode))
     end
@@ -196,12 +197,12 @@ does not need a runtime freshness guard. The compilation runs as one
 [`SpecializeReport`](@ref).
 """
 function execute_specialized(ex; algebra=DefaultAlgebra(), mode=:safe,
-        policy::SpecializePolicy=SpecializePolicy(), report=nothing)
+    policy::SpecializePolicy=SpecializePolicy(), report=nothing)
     code = specialize_compile(;
         algebra=algebra, mode=mode, policy=policy, report=report) do ctx
         sym = freshen(ctx, :ex)
         body = execute_code(
-            sym, typeof(ex); algebra=algebra, mode=mode, ctx=ctx, concrete=ex,
+            sym, typeof(ex); algebra=algebra, mode=mode, ctx=ctx, concrete=ex
         )
         quote
             $sym = $ex
@@ -262,6 +263,8 @@ sparsity information to reliably skip iterations when possible.
  - `specialize`: make concrete tensor structure available to a loaded
     specialization extension; a fresh kernel is generated per call. The default is `false`.
  - `policy`: the [`SpecializePolicy`](@ref) a specialized compilation mines under.
+ - `report`: a `Ref` that receives the specialized compilation's
+    [`SpecializeReport`](@ref).
 
 See also: [`@finch_code`](@ref)
 """
@@ -355,7 +358,7 @@ function finch_code(
         specialize_compile(;
             algebra=algebra, mode=mode, policy=policy, report=report) do ctx
             execute_code(
-                :ex, typeof(prgm); algebra=algebra, mode=mode, ctx=ctx, concrete=prgm,
+                :ex, typeof(prgm); algebra=algebra, mode=mode, ctx=ctx, concrete=prgm
             )
         end
     else
@@ -387,9 +390,11 @@ function finch_kernel(
     if specialize
         # A specialized compilation owns a fresh attempt-bearing context; a
         # caller-supplied context carries no attempt.
-        ctx === nothing || throw(ArgumentError(
-            "finch_kernel: specialize=true builds a fresh compiler context per " *
-            "attempt and cannot reuse a caller-supplied ctx"))
+        ctx === nothing || throw(
+            ArgumentError(
+                "finch_kernel: specialize=true builds a fresh compiler context per " *
+                "attempt and cannot reuse a caller-supplied ctx"),
+        )
         return specialize_compile(;
             algebra=algebra, mode=mode, policy=policy, report=report) do ctx_2
             finch_kernel_code(fname, args, prgm, ctx_2; algebra=algebra, mode=mode)

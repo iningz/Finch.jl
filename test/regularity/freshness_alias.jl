@@ -15,15 +15,17 @@
     a_sparse = A.lvl.lvl
     shared_idx = a_sparse.idx
     b_ptr = copy(a_sparse.ptr)
-    B = Tensor(F.DenseLevel{Int}(
-        F.SparseListLevel{Int}(
-            Element(0.0, copy(a_sparse.lvl.val)),
-            a_sparse.shape,
-            b_ptr,
-            shared_idx,
+    B = Tensor(
+        F.DenseLevel{Int}(
+            F.SparseListLevel{Int}(
+                Element(0.0, copy(a_sparse.lvl.val)),
+                a_sparse.shape,
+                b_ptr,
+                shared_idx,
+            ),
+            A.lvl.shape,
         ),
-        A.lvl.shape,
-    ))
+    )
     replacement = Tensor(
         Dense(SparseList(Element(0.0))), replacement_data)
 
